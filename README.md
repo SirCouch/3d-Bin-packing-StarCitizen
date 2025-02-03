@@ -1,0 +1,1 @@
+This is a work-in-progress 3D bin-packing implementation intended for Star Citizen. My hope is that it will eventually be deployed as a web app for everyone’s use. Currently, this is a first pass at a working model, and there is more work to be done.
