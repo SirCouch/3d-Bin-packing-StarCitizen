@@ -1,3 +1,5 @@
+import json
+from flask import Flask, request, jsonify
 from numba import cuda, jit
 import cupy as cp
 import math
@@ -9,11 +11,16 @@ import sys
 from typing import List, Tuple
 from dotenv import load_dotenv
 import os
+
+load_dotenv()
+
+app = Flask(__name__)
+
+
+
 @cuda.jit
 def validate_placements_gpu(placements_gpu, dims_gpu, priorities_gpu, results_gpu):
-
-    #CUDA kernel for validating box placements in parallel
-
+    # CUDA kernel for validating box placements in parallel
     idx = cuda.grid(1)
     if idx < placements_gpu.shape[0]:
         x, y, z = placements_gpu[idx, 0:3]
@@ -38,10 +45,7 @@ class CargoBox:
         self.name = name
 
 def validate_access_path(placements: List[Tuple], container_dims: Tuple[float, float, float]) -> bool:
-
-    #Validates that boxes have a clear path to the container door
-    #Assumes door is at y=0 (front of container)
-
+    # Validates that boxes have a clear path to the container door (assumes door is at y=0)
     W, L, H = container_dims
     sorted_placements = sorted(placements, key=lambda p: p[-1])  # Sort by priority
 
@@ -63,22 +67,19 @@ def validate_access_path(placements: List[Tuple], container_dims: Tuple[float, f
 
 def validate_stacking_weights(placements: List[Tuple], cargo_boxes: List[CargoBox],
                               max_stack_weight: float) -> bool:
-    #Validates weight constraints for stacked boxes.
+    # Validates weight constraints for stacked boxes.
     for p1 in placements:
         total_weight = 0
         box1 = next(box for box in cargo_boxes if box.id == p1[0])
-
         for p2 in placements:
             if p1 == p2:
                 continue
             box2 = next(box for box in cargo_boxes if box.id == p2[0])
-
             # Check if box2 is above box1
             if (p2[2] >= p1[2] + p1[5] and  # z overlap
                     p2[3] < p1[3] + p1[6] and    # y overlap
                     p2[4] < p1[4] + p1[7]):      # x overlap
                 total_weight += box2.weight
-
         if total_weight > max_stack_weight:
             return False
     return True
@@ -89,124 +90,99 @@ def add_no_overlap_constraints(model, n, g, cargo_list, grid_assign, x_vars, y_v
     for i in range(n):
         for k in range(i+1, n):
             for p in range(6):
-                A_vars[(i,k,p)] = LpVariable(f"A_{i}_{k}_{p}", cat="Binary")
-
+                A_vars[(i, k, p)] = LpVariable(f"A_{i}_{k}_{p}", cat="Binary")
     # Add no-overlap constraints
     for i in range(n):
         w_i, l_i, h_i = cargo_list[i][1:4]
         for k in range(i+1, n):
             w_k, l_k, h_k = cargo_list[k][1:4]
-
             # Only enforce no-overlap when boxes are in the same grid
             for j in range(g):
                 # Indicator that both boxes are in grid j
-                same_grid = grid_assign[(i,j)] + grid_assign[(k,j)] == 2
+                same_grid = grid_assign[(i, j)] + grid_assign[(k, j)] == 2
 
                 # Six separating plane constraints
-                # 1. i is to the left of k
                 model.addConstraint(
-                    x_vars[i] + w_i <= x_vars[k] + bigM * (1 - A_vars[(i,k,0)] + (1 - same_grid)),
+                    x_vars[i] + w_i <= x_vars[k] + bigM * (1 - A_vars[(i, k, 0)] + (1 - same_grid)),
                     name=f"no_overlap_x1_{i}_{k}_{j}"
                 )
-
-                # 2. i is to the right of k
                 model.addConstraint(
-                    x_vars[k] + w_k <= x_vars[i] + bigM * (1 - A_vars[(i,k,1)] + (1 - same_grid)),
+                    x_vars[k] + w_k <= x_vars[i] + bigM * (1 - A_vars[(i, k, 1)] + (1 - same_grid)),
                     name=f"no_overlap_x2_{i}_{k}_{j}"
                 )
-
-                # 3. i is behind k
                 model.addConstraint(
-                    y_vars[i] + l_i <= y_vars[k] + bigM * (1 - A_vars[(i,k,2)] + (1 - same_grid)),
+                    y_vars[i] + l_i <= y_vars[k] + bigM * (1 - A_vars[(i, k, 2)] + (1 - same_grid)),
                     name=f"no_overlap_y1_{i}_{k}_{j}"
                 )
-
-                # 4. i is in front of k
                 model.addConstraint(
-                    y_vars[k] + l_k <= y_vars[i] + bigM * (1 - A_vars[(i,k,3)] + (1 - same_grid)),
+                    y_vars[k] + l_k <= y_vars[i] + bigM * (1 - A_vars[(i, k, 3)] + (1 - same_grid)),
                     name=f"no_overlap_y2_{i}_{k}_{j}"
                 )
-
-                # 5. i is below k
                 model.addConstraint(
-                    z_vars[i] + h_i <= z_vars[k] + bigM * (1 - A_vars[(i,k,4)] + (1 - same_grid)),
+                    z_vars[i] + h_i <= z_vars[k] + bigM * (1 - A_vars[(i, k, 4)] + (1 - same_grid)),
                     name=f"no_overlap_z1_{i}_{k}_{j}"
                 )
-
-                # 6. i is above k
                 model.addConstraint(
-                    z_vars[k] + h_k <= z_vars[i] + bigM * (1 - A_vars[(i,k,5)] + (1 - same_grid)),
+                    z_vars[k] + h_k <= z_vars[i] + bigM * (1 - A_vars[(i, k, 5)] + (1 - same_grid)),
                     name=f"no_overlap_z2_{i}_{k}_{j}"
                 )
-
                 # At least one separating plane must exist between boxes in the same grid
                 model.addConstraint(
-                    lpSum(A_vars[(i,k,p)] for p in range(6)) >= same_grid,
+                    lpSum(A_vars[(i, k, p)] for p in range(6)) >= same_grid,
                     name=f"at_least_one_separation_{i}_{k}_{j}"
                 )
-
     return A_vars
 
 def add_route_constraints(model, n, g, route_order, grid_assign, y_vars, bigM):
-
     min_spacing = 0.1  # Minimum spacing between boxes
-
     for i in range(n):
         for k in range(n):
             if i != k and route_order[i] < route_order[k]:
                 for j in range(g):
                     # Only apply if both boxes are in the same grid
                     model.addConstraint(
-                        y_vars[i] >= y_vars[k] + min_spacing - bigM*(2 - grid_assign[(i,j)] - grid_assign[(k,j)]),
+                        y_vars[i] >= y_vars[k] + min_spacing - bigM * (2 - grid_assign[(i, j)] - grid_assign[(k, j)]),
                         name=f"route_order_{i}_{k}_{j}"
                     )
 
 def build_model(n, g, cargo_list, grids, route_order):
     model = LpProblem(name="3D_Stacking_Multiple_Grids", sense=LpMinimize)
-
     # Calculate a tighter bigM based on maximum possible coordinate
     bigM = max(max(grid[1:4]) for grid in grids) * 2
-
     # Create variables
-    grid_assign = {(i,j): LpVariable(f"grid_{i}_{j}", cat="Binary")
+    grid_assign = {(i, j): LpVariable(f"grid_{i}_{j}", cat="Binary")
                    for i in range(n) for j in range(g)}
     x_vars = {i: LpVariable(f"x_{i}", lowBound=0) for i in range(n)}
     y_vars = {i: LpVariable(f"y_{i}", lowBound=0) for i in range(n)}
     z_vars = {i: LpVariable(f"z_{i}", lowBound=0) for i in range(n)}
-
     # Add grid assignment constraints
     for i in range(n):
         model.addConstraint(
-            lpSum(grid_assign[(i,j)] for j in range(g)) == 1,
+            lpSum(grid_assign[(i, j)] for j in range(g)) == 1,
             name=f"box_{i}_grid_assignment"
         )
-
     # Add dimension constraints
     for i in range(n):
         for j in range(g):
             W_j, L_j, H_j = grids[j][1:4]
             _, w_i, l_i, h_i, _ = cargo_list[i]
-
             model.addConstraint(
-                x_vars[i] + w_i <= W_j + bigM*(1 - grid_assign[(i,j)]),
+                x_vars[i] + w_i <= W_j + bigM * (1 - grid_assign[(i, j)]),
                 name=f"bound_x_{i}_{j}"
             )
             model.addConstraint(
-                y_vars[i] + l_i <= L_j + bigM*(1 - grid_assign[(i,j)]),
+                y_vars[i] + l_i <= L_j + bigM * (1 - grid_assign[(i, j)]),
                 name=f"bound_y_{i}_{j}"
             )
             model.addConstraint(
-                z_vars[i] + h_i <= H_j + bigM*(1 - grid_assign[(i,j)]),
+                z_vars[i] + h_i <= H_j + bigM * (1 - grid_assign[(i, j)]),
                 name=f"bound_z_{i}_{j}"
             )
-
     # Add no-overlap constraints
     A_vars = add_no_overlap_constraints(model, n, g, cargo_list, grid_assign,
                                         x_vars, y_vars, z_vars, bigM)
-
     # Add route constraints
     add_route_constraints(model, n, g, route_order, grid_assign, y_vars, bigM)
-
     # Add symmetry-breaking constraints
     for i in range(1, n):
         model.addConstraint(
@@ -221,13 +197,27 @@ def build_model(n, g, cargo_list, grids, route_order):
             z_vars[i-1] <= z_vars[i],
             name=f"symmetry_breaking_z_{i}"
         )
-
     return model, x_vars, y_vars, z_vars, grid_assign
 
 
-def main():
-    # 1) Connect to DB
+def run_optimization(data):
+    """
+    Expects a JSON object with the following structure:
+    {
+        "ship_name": "Some Ship",
+        "cargo_selection": [
+            { "cargo_item_id": 1, "quantity": 3, "unload_priorities": [1, 2, 3] },
+            { "cargo_item_id": 2, "quantity": 2, "unload_priorities": [4, 5] }
+        ]
+    }
+    """
+    if "ship_name" not in data or "cargo_selection" not in data:
+        return {"error": "Missing required fields: ship_name and cargo_selection"}
 
+    ship_name = data["ship_name"]
+    cargo_selection = data["cargo_selection"]
+
+    # Connect to the database
     try:
         conn = psycopg2.connect(
             dbname=os.getenv("DB_NAME"),
@@ -237,27 +227,11 @@ def main():
             port=os.getenv("DB_PORT")
         )
     except Exception as e:
-        print("Could not connect to the database:", e)
-        sys.exit(1)
+        return {"error": f"Could not connect to the database: {str(e)}"}
+
     cursor = conn.cursor()
 
-
-    # 2) Select Ship
-
-    print("Available ships in the database:")
-    cursor.execute("""
-        SELECT DISTINCT ship_name, total_scu, grid_count 
-        FROM temp_grid_import 
-        WHERE grid_name IS NULL 
-        ORDER BY ship_name;
-    """)
-    ships = cursor.fetchall()
-    for s in ships:
-        print(f"  Name={s[0]}  Total SCU={s[1]}  Grid Count={s[2]}")
-
-    ship_name = input("\nEnter the ship name: ")
-
-    # Get all grids for selected ship
+    # Get all grids for the selected ship
     cursor.execute("""
         SELECT grid_name, dimension_x, dimension_y, dimension_z, grid_size 
         FROM temp_grid_import 
@@ -265,129 +239,126 @@ def main():
         ORDER BY grid_name;
     """, (ship_name,))
     grids = cursor.fetchall()
-
     if not grids:
-        print(f"No grids found for ship {ship_name}")
-        sys.exit(1)
+        cursor.close()
+        conn.close()
+        return {"error": f"No grids found for ship {ship_name}"}
 
-    print(f"\nAvailable cargo grids for {ship_name}:")
-    for i, g in enumerate(grids):
-        print(f"  {i+1}) {g[0]} (Dimensions: {g[1]} x {g[2]} x {g[3]}, Size: {g[4]} SCU)")
-
-
-    # 3) Ask for cargo items
-
-    print("\nAvailable cargo items:")
-    cursor.execute("SELECT cargo_item_id, name, width_x, length_y, height_z FROM cargo_items ORDER BY name;")
-    cargo_items = cursor.fetchall()
-    for c in cargo_items:
-        print(f"  ID={c[0]}  {c[1]} (Dims: {c[2]} x {c[3]} x {c[4]})")
-
-    print("\nEnter cargo_item_id and quantity, or just press Enter when done.")
-    user_cargo_selection = []
-    while True:
-        line = input("cargo_item_id, quantity: ")
-        if not line.strip():
-            break
-        parts = line.split(",")
-        if len(parts) != 2:
-            print("Invalid format. Please enter 'cargo_item_id, quantity'.")
-            continue
-        try:
-            c_id = int(parts[0].strip())
-            q = int(parts[1].strip())
-            user_cargo_selection.append((c_id, q))
-        except ValueError:
-            print("Invalid integer input. Try again.")
-            continue
-
+    # Build cargo_list and route_order based on the user's cargo selections
     cargo_list = []
+    route_order = {}
     item_index = 0
-    for (cargo_item_id, quantity) in user_cargo_selection:
+    for item in cargo_selection:
+        # Each item should have cargo_item_id and quantity; unload_priorities is optional.
+        if "cargo_item_id" not in item or "quantity" not in item:
+            continue
+        cargo_item_id = item["cargo_item_id"]
+        quantity = item["quantity"]
+        unload_priorities = item.get("unload_priorities", None)
+        # Fetch cargo item details from the database
         cursor.execute(
-            "SELECT name, width_x, length_y, height_z "
-            "FROM cargo_items WHERE cargo_item_id = %s",
+            "SELECT name, width_x, length_y, height_z FROM cargo_items WHERE cargo_item_id = %s",
             (cargo_item_id,)
         )
         cargo_row = cursor.fetchone()
         if not cargo_row:
-            print(f"No cargo item found with cargo_item_id={cargo_item_id}")
+            # Skip if not found
             continue
         c_name, w_i, l_i, h_i = cargo_row
-        for _ in range(quantity):
+        for q in range(quantity):
             cargo_list.append((item_index, w_i, l_i, h_i, c_name))
+            # Use provided unload priority if available; otherwise, use default value 9999.
+            if unload_priorities and isinstance(unload_priorities, list) and len(unload_priorities) > q:
+                route_order[item_index] = int(unload_priorities[q])
+            else:
+                route_order[item_index] = 9999
             item_index += 1
 
     if not cargo_list:
-        print("\nNo cargo items selected. Exiting.")
-        sys.exit(0)
+        cursor.close()
+        conn.close()
+        return {"error": "No valid cargo items selected."}
 
     n = len(cargo_list)
-    print(f"\nNumber of cargo boxes to pack: {n}")
 
-
-    # 4) Ask user for a route (unload) order for each box
-    #    (lower number => unload first).
-
-    route_order = {}
-    print("\nAssign an 'unload priority' for each cargo box (lower => off first).")
-    for (i, w_i, l_i, h_i, c_name) in cargo_list:
-        val = input(f"Box {i} [{c_name}, dims=({w_i}x{l_i}x{h_i})], unload priority? ")
-        try:
-            route_order[i] = int(val)
-        except ValueError:
-            route_order[i] = 9999  # default if user doesn't provide a number
-
-
-    # 5) Build the MILP model (Stack + Route constraints)
-    #    For brevity, we'll just show a feasibility approach, same as before,
-    #    plus the "no blocking" route logic.
-    #    (Add code from your stacking approach + route constraint.)
-
-    # Build and solve model
+    # Build the MILP model (Stacking + Route constraints)
     model, x_vars, y_vars, z_vars, grid_assign = build_model(
-        n=len(cargo_list),
-        g=len(grids),  # Ensure g is the number of grids
+        n=n,
+        g=len(grids),
         cargo_list=cargo_list,
         grids=grids,
         route_order=route_order
     )
-
     # Solve the model
-    print("\nSolving the model with multiple grids...")
     solver_status = model.solve(PULP_CBC_CMD(msg=0))
+    gridOutput = []  # This will hold our JSON-friendly output
 
     if LpStatus[model.status] == "Optimal":
-        # Create separate placement lists for each grid
         num_grids = len(grids)
         grid_placements = {j: [] for j in range(num_grids)}
-
         for i in range(n):
             x_val = x_vars[i].varValue
             y_val = y_vars[i].varValue
             z_val = z_vars[i].varValue
-
             # Find which grid this box was assigned to
-            assigned_grid = next(j for j in range(num_grids) if grid_assign[(i,j)].varValue > 0.5)
-
+            assigned_grid = next(j for j in range(num_grids) if grid_assign[(i, j)].varValue > 0.5)
             grid_placements[assigned_grid].append((
-                i, cargo_list[i][4], x_val, y_val, z_val,
-                cargo_list[i][1], cargo_list[i][2], cargo_list[i][3],
-                route_order[i]
+                i,                   # Box ID
+                cargo_list[i][4],    # Cargo Name
+                x_val, y_val, z_val, # Coordinates
+                cargo_list[i][1],    # Width
+                cargo_list[i][2],    # Length
+                cargo_list[i][3],    # Height
+                route_order[i]       # Unload Priority
             ))
-
-        # Print placements for all grids
-        for j in range(num_grids):  # Use num_grids instead of g
-            if grid_placements[j]:  # Only print if grid has cargo
-                print(f"\nPlacements for grid {grids[j][0]}:")
-                for p in grid_placements[j]:
-                    print(f"  {p[0]}: {p[1]} @ (x={p[2]:.2f}, y={p[3]:.2f}, z={p[4]:.2f}) "
-                          f"-> dims=({p[5]}x{p[6]}x{p[7]}), priority={p[8]}")
-
-
+        # Build the JSON-friendly dictionary for each grid
+        for j in range(num_grids):
+            grid_data = {
+                "gridName": grids[j][0],
+                "dimensions": {
+                    "width": grids[j][1],
+                    "length": grids[j][2],
+                    "height": grids[j][3]
+                },
+                "boxes": []
+            }
+            for p in grid_placements[j]:
+                box_data = {
+                    "boxId": p[0],
+                    "cargoName": p[1],
+                    "x": p[2],
+                    "y": p[3],
+                    "z": p[4],
+                    "width": p[5],
+                    "length": p[6],
+                    "height": p[7],
+                    "priority": p[8]
+                }
+                grid_data["boxes"].append(box_data)
+            gridOutput.append(grid_data)
+    else:
+        cursor.close()
+        conn.close()
+        return {"error": "No optimal solution found."}
 
     cursor.close()
     conn.close()
+    return gridOutput
 
-if __name__ == "__main__":
-    main()
+
+@app.route('/optimize', methods=['POST'])
+def optimize():
+    """
+    Expects a JSON payload with keys 'ship_name' and 'cargo_selection'.
+    Returns the computed grid placement as JSON.
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "No input data provided"}), 400
+    result = run_optimization(data)
+    return jsonify(result)
+
+
+
+if __name__ == '__main__':
+    app.run(debug=True, host='0.0.0.0', port=8000)
