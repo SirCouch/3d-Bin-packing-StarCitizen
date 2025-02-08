@@ -9,6 +9,9 @@ import sys
 from typing import List, Tuple
 from dotenv import load_dotenv
 import os
+
+load_dotenv()
+
 @cuda.jit
 def validate_placements_gpu(placements_gpu, dims_gpu, priorities_gpu, results_gpu):
 

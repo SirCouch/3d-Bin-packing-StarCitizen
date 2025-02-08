@@ -96,7 +96,7 @@ def add_no_overlap_constraints(model, n, g, cargo_list, grid_assign, x_vars, y_v
 
     The gap in the horizontal directions is set conditionally:
        gap = 0.0 if route_order[i] == route_order[k] else 1.0.
-    We add the constraints only when both boxes are assigned to the same grid.
+    add the constraints only when both boxes are assigned to the same grid.
     """
     A_vars = {}
     for i in range(n):
@@ -114,18 +114,18 @@ def add_no_overlap_constraints(model, n, g, cargo_list, grid_assign, x_vars, y_v
             gap_ik = 0.0 if route_order[i] == route_order[k] else 1.0
             for j in range(g):
                 # "same_grid" is 1 when both boxes are assigned to grid j.
-                # We write it as a linear condition:
+                # write it as a linear condition:
                 #   grid_assign[i,j] + grid_assign[k,j] == 2  is equivalent to both being 1.
-                # For our constraints, we multiply by 1.0 to “activate” the constraint only if they are in the same grid.
+                # For our constraints, multiply by 1.0 to “activate” the constraint only if they are in the same grid.
                 same_grid = grid_assign[(i, j)] + grid_assign[(k, j)]
                 # For the constraints below, if same_grid==2 then the constraint is active.
-                # We use a term (1 - (2 - same_grid)) which becomes 1 when same_grid==2, and relaxes otherwise.
+                # use a term (1 - (2 - same_grid)) which becomes 1 when same_grid==2, and relaxes otherwise.
                 activation = 1.0 if same_grid == 2 else 0.0
-                # However, since grid_assign are continuous binary variables, we cannot directly use equality.
-                # Instead, we embed the concept by multiplying the big-M term by (1 - (grid_assign[(i,j)] + grid_assign[(k,j)] - 1)).
+                # However, since grid_assign are continuous binary variables, cannot directly use equality.
+                # Instead, embed the concept by multiplying the big-M term by (1 - (grid_assign[(i,j)] + grid_assign[(k,j)] - 1)).
                 # A common trick is to add the separation constraints for all grids and then require that:
                 #   lpSum(A_vars) >= (grid_assign[i,j] + grid_assign[k,j] - 1)
-                # Here we include the big-M term as already in the constraints.
+                # Here include the big-M term as already in the constraints.
 
                 # Constraint 1: Box i is to the left of box k
                 model.addConstraint(
@@ -158,7 +158,7 @@ def add_no_overlap_constraints(model, n, g, cargo_list, grid_assign, x_vars, y_v
                     name=f"no_overlap_z2_{i}_{k}_{j}"
                 )
                 # Finally, require that at least one separation mode is active if both boxes are in the same grid.
-                # When grid_assign[i,j] + grid_assign[k,j] == 2, then we require:
+                # When grid_assign[i,j] + grid_assign[k,j] == 2, then require:
                 #   Sum_{p=0..5} A_vars[(i,k,p)] >= 1.
                 model.addConstraint(
                     lpSum(A_vars[(i,k,p)] for p in range(6)) >= (grid_assign[(i,j)] + grid_assign[(k,j)] - 1),
@@ -168,7 +168,7 @@ def add_no_overlap_constraints(model, n, g, cargo_list, grid_assign, x_vars, y_v
 
 def add_route_constraints(model, n, g, route_order, grid_assign, y_vars, bigM):
     # This function is kept for compatibility if you want to enforce additional ordering by unload priority.
-    # Here we enforce that if a box with a lower priority should unload first,
+    # Here enforce that if a box with a lower priority should unload first,
     # its y coordinate is at least a minimum spacing ahead.
     min_spacing = 0.1  # You can adjust this as needed.
     for i in range(n):
