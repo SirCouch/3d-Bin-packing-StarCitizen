@@ -1,7 +1,5 @@
 import json
 from numba import cuda, jit
-import cupy as cp
-import math
 import psycopg2
 from pulp import (
     LpProblem, LpMinimize, LpVariable, LpBinary, lpSum, LpStatus, PULP_CBC_CMD
@@ -79,120 +77,160 @@ def validate_stacking_weights(placements: List[Tuple], cargo_boxes: List[CargoBo
             return False
     return True
 
-def add_no_overlap_constraints(model, n, g, cargo_list, grid_assign, x_vars, y_vars, z_vars, bigM):
-    # Create binary variables for the six possible separating planes
+def add_no_overlap_constraints(model, n, g, cargo_list, grid_assign, x_vars, y_vars, z_vars, bigM, route_order):
+    """
+    For each pair of boxes (i,k) (with i < k) that are in the same grid,
+    create binary separation variables A_vars[(i,k,p)] for p = 0,...,5 corresponding to
+    one of the 6 mutually exclusive separating conditions:
+      0: box i is to the left of box k (x_i + width_i + gap <= x_k)
+      1: box i is to the right of box k (x_k + width_k + gap <= x_i)
+      2: box i is behind box k (y_i + length_i + gap <= y_k)
+      3: box i is in front of box k (y_k + length_k + gap <= y_i)
+      4: box i is below box k (z_i + height_i <= z_k)  -- no gap needed vertically
+      5: box i is above box k (z_k + height_k <= z_i)
+
+    The gap in the horizontal directions is set conditionally:
+       gap = 0.0 if route_order[i] == route_order[k] else 1.0.
+    We add the constraints only when both boxes are assigned to the same grid.
+    """
     A_vars = {}
     for i in range(n):
         for k in range(i+1, n):
+            # Create 6 binary variables for each pair (i,k)
             for p in range(6):
                 A_vars[(i, k, p)] = LpVariable(f"A_{i}_{k}_{p}", cat="Binary")
-    # Add no-overlap constraints
+
+    # Add non-overlap constraints for each pair (i,k) and for each grid j.
     for i in range(n):
         w_i, l_i, h_i = cargo_list[i][1:4]
         for k in range(i+1, n):
             w_k, l_k, h_k = cargo_list[k][1:4]
-            # Only enforce no-overlap when boxes are in the same grid
+            # Determine the gap for horizontal (x,y) separation based on unload priority.
+            gap_ik = 0.0 if route_order[i] == route_order[k] else 1.0
             for j in range(g):
-                # Indicator that both boxes are in grid j
-                same_grid = grid_assign[(i, j)] + grid_assign[(k, j)] == 2
+                # "same_grid" is 1 when both boxes are assigned to grid j.
+                # We write it as a linear condition:
+                #   grid_assign[i,j] + grid_assign[k,j] == 2  is equivalent to both being 1.
+                # For our constraints, we multiply by 1.0 to “activate” the constraint only if they are in the same grid.
+                same_grid = grid_assign[(i, j)] + grid_assign[(k, j)]
+                # For the constraints below, if same_grid==2 then the constraint is active.
+                # We use a term (1 - (2 - same_grid)) which becomes 1 when same_grid==2, and relaxes otherwise.
+                activation = 1.0 if same_grid == 2 else 0.0
+                # However, since grid_assign are continuous binary variables, we cannot directly use equality.
+                # Instead, we embed the concept by multiplying the big-M term by (1 - (grid_assign[(i,j)] + grid_assign[(k,j)] - 1)).
+                # A common trick is to add the separation constraints for all grids and then require that:
+                #   lpSum(A_vars) >= (grid_assign[i,j] + grid_assign[k,j] - 1)
+                # Here we include the big-M term as already in the constraints.
 
-                # Six separating plane constraints
+                # Constraint 1: Box i is to the left of box k
                 model.addConstraint(
-                    x_vars[i] + w_i <= x_vars[k] + bigM * (1 - A_vars[(i, k, 0)] + (1 - same_grid)),
+                    x_vars[i] + w_i + gap_ik <= x_vars[k] + bigM * (1 - A_vars[(i,k,0)] + (1 - (grid_assign[(i,j)] + grid_assign[(k,j)] - 1))),
                     name=f"no_overlap_x1_{i}_{k}_{j}"
                 )
+                # Constraint 2: Box i is to the right of box k
                 model.addConstraint(
-                    x_vars[k] + w_k <= x_vars[i] + bigM * (1 - A_vars[(i, k, 1)] + (1 - same_grid)),
+                    x_vars[k] + w_k + gap_ik <= x_vars[i] + bigM * (1 - A_vars[(i,k,1)] + (1 - (grid_assign[(i,j)] + grid_assign[(k,j)] - 1))),
                     name=f"no_overlap_x2_{i}_{k}_{j}"
                 )
+                # Constraint 3: Box i is behind box k (y-direction)
                 model.addConstraint(
-                    y_vars[i] + l_i <= y_vars[k] + bigM * (1 - A_vars[(i, k, 2)] + (1 - same_grid)),
+                    y_vars[i] + l_i + gap_ik <= y_vars[k] + bigM * (1 - A_vars[(i,k,2)] + (1 - (grid_assign[(i,j)] + grid_assign[(k,j)] - 1))),
                     name=f"no_overlap_y1_{i}_{k}_{j}"
                 )
+                # Constraint 4: Box i is in front of box k
                 model.addConstraint(
-                    y_vars[k] + l_k <= y_vars[i] + bigM * (1 - A_vars[(i, k, 3)] + (1 - same_grid)),
+                    y_vars[k] + l_k + gap_ik <= y_vars[i] + bigM * (1 - A_vars[(i,k,3)] + (1 - (grid_assign[(i,j)] + grid_assign[(k,j)] - 1))),
                     name=f"no_overlap_y2_{i}_{k}_{j}"
                 )
+                # Constraint 5: Box i is below box k (vertical)
                 model.addConstraint(
-                    z_vars[i] + h_i <= z_vars[k] + bigM * (1 - A_vars[(i, k, 4)] + (1 - same_grid)),
+                    z_vars[i] + h_i <= z_vars[k] + bigM * (1 - A_vars[(i,k,4)] + (1 - (grid_assign[(i,j)] + grid_assign[(k,j)] - 1))),
                     name=f"no_overlap_z1_{i}_{k}_{j}"
                 )
+                # Constraint 6: Box i is above box k
                 model.addConstraint(
-                    z_vars[k] + h_k <= z_vars[i] + bigM * (1 - A_vars[(i, k, 5)] + (1 - same_grid)),
+                    z_vars[k] + h_k <= z_vars[i] + bigM * (1 - A_vars[(i,k,5)] + (1 - (grid_assign[(i,j)] + grid_assign[(k,j)] - 1))),
                     name=f"no_overlap_z2_{i}_{k}_{j}"
                 )
-                # At least one separating plane must exist between boxes in the same grid
+                # Finally, require that at least one separation mode is active if both boxes are in the same grid.
+                # When grid_assign[i,j] + grid_assign[k,j] == 2, then we require:
+                #   Sum_{p=0..5} A_vars[(i,k,p)] >= 1.
                 model.addConstraint(
-                    lpSum(A_vars[(i, k, p)] for p in range(6)) >= same_grid,
+                    lpSum(A_vars[(i,k,p)] for p in range(6)) >= (grid_assign[(i,j)] + grid_assign[(k,j)] - 1),
                     name=f"at_least_one_separation_{i}_{k}_{j}"
                 )
     return A_vars
 
 def add_route_constraints(model, n, g, route_order, grid_assign, y_vars, bigM):
-    min_spacing = 0.1  # Minimum spacing between boxes
+    # This function is kept for compatibility if you want to enforce additional ordering by unload priority.
+    # Here we enforce that if a box with a lower priority should unload first,
+    # its y coordinate is at least a minimum spacing ahead.
+    min_spacing = 0.1  # You can adjust this as needed.
     for i in range(n):
         for k in range(n):
             if i != k and route_order[i] < route_order[k]:
                 for j in range(g):
-                    # Only apply if both boxes are in the same grid
                     model.addConstraint(
-                        y_vars[i] >= y_vars[k] + min_spacing - bigM * (2 - grid_assign[(i, j)] - grid_assign[(k, j)]),
+                        y_vars[i] >= y_vars[k] + min_spacing - bigM * (2 - grid_assign[(i,j)] - grid_assign[(k,j)]),
                         name=f"route_order_{i}_{k}_{j}"
                     )
 
 def build_model(n, g, cargo_list, grids, route_order):
+    """
+    Builds the MILP for 3D stacking across multiple grids.
+    cargo_list is assumed to be a list of tuples where:
+      cargo_list[i][1] = width of box i
+      cargo_list[i][2] = length of box i
+      cargo_list[i][3] = height of box i
+      cargo_list[i][4] = cargo name (or any identifier)
+    grids is assumed to be a list where each grid is a tuple:
+      (gridName, width, length, height, ...)
+    route_order is a dict mapping box index to its unload priority.
+    """
     model = LpProblem(name="3D_Stacking_Multiple_Grids", sense=LpMinimize)
-    # Calculate a tighter bigM based on maximum possible coordinate
+    # A tight bigM based on grid dimensions (here simply twice the maximum of grid dimensions)
     bigM = max(max(grid[1:4]) for grid in grids) * 2
-    # Create variables
-    grid_assign = {(i, j): LpVariable(f"grid_{i}_{j}", cat="Binary")
-                   for i in range(n) for j in range(g)}
+
+    # Create grid assignment binary variables and coordinate variables.
+    grid_assign = {(i, j): LpVariable(f"grid_{i}_{j}", cat="Binary") for i in range(n) for j in range(g)}
     x_vars = {i: LpVariable(f"x_{i}", lowBound=0) for i in range(n)}
     y_vars = {i: LpVariable(f"y_{i}", lowBound=0) for i in range(n)}
     z_vars = {i: LpVariable(f"z_{i}", lowBound=0) for i in range(n)}
-    # Add grid assignment constraints
+
+    # Each box must be assigned to exactly one grid.
     for i in range(n):
         model.addConstraint(
             lpSum(grid_assign[(i, j)] for j in range(g)) == 1,
-            name=f"box_{i}_grid_assignment"
+            name=f"assign_{i}"
         )
-    # Add dimension constraints
+
+    # Enforce that if a box is assigned to grid j, its coordinates (plus its dimensions) are within the grid.
     for i in range(n):
         for j in range(g):
             W_j, L_j, H_j = grids[j][1:4]
-            _, w_i, l_i, h_i, _ = cargo_list[i]
             model.addConstraint(
-                x_vars[i] + w_i <= W_j + bigM * (1 - grid_assign[(i, j)]),
+                x_vars[i] + cargo_list[i][1] <= W_j + bigM * (1 - grid_assign[(i,j)]),
                 name=f"bound_x_{i}_{j}"
             )
             model.addConstraint(
-                y_vars[i] + l_i <= L_j + bigM * (1 - grid_assign[(i, j)]),
+                y_vars[i] + cargo_list[i][2] <= L_j + bigM * (1 - grid_assign[(i,j)]),
                 name=f"bound_y_{i}_{j}"
             )
             model.addConstraint(
-                z_vars[i] + h_i <= H_j + bigM * (1 - grid_assign[(i, j)]),
+                z_vars[i] + cargo_list[i][3] <= H_j + bigM * (1 - grid_assign[(i,j)]),
                 name=f"bound_z_{i}_{j}"
             )
-    # Add no-overlap constraints
-    A_vars = add_no_overlap_constraints(model, n, g, cargo_list, grid_assign,
-                                        x_vars, y_vars, z_vars, bigM)
-    # Add route constraints
+
+    # Add the no-overlap constraints that include conditional gap based on unload priority.
+    a_vars = add_no_overlap_constraints(model, n, g, cargo_list, grid_assign, x_vars, y_vars, z_vars, bigM, route_order)
+
+    # Optionally, you can add route constraints if desired.
     add_route_constraints(model, n, g, route_order, grid_assign, y_vars, bigM)
-    # Add symmetry-breaking constraints
-    for i in range(1, n):
-        model.addConstraint(
-            x_vars[i-1] <= x_vars[i],
-            name=f"symmetry_breaking_x_{i}"
-        )
-        model.addConstraint(
-            y_vars[i-1] <= y_vars[i],
-            name=f"symmetry_breaking_y_{i}"
-        )
-        model.addConstraint(
-            z_vars[i-1] <= z_vars[i],
-            name=f"symmetry_breaking_z_{i}"
-        )
-    return model, x_vars, y_vars, z_vars, grid_assign
+
+    # Objective: minimize the total top-surface height (for instance, sum of z coordinate plus height for each box)
+    model += lpSum(z_vars[i] + cargo_list[i][3] for i in range(n)), "Minimize_Total_Height"
+
+    return model, x_vars, y_vars, z_vars, grid_assign, a_vars
 
 def main():
     # 1) Connect to DB
@@ -295,7 +333,7 @@ def main():
             route_order[i] = 9999  # default if user doesn't provide a number
 
     # 5) Build the MILP model (Stack + Route constraints)
-    model, x_vars, y_vars, z_vars, grid_assign = build_model(
+    model, x_vars, y_vars, z_vars, grid_assign, a_vars = build_model(
         n=len(cargo_list),
         g=len(grids),
         cargo_list=cargo_list,
@@ -305,6 +343,9 @@ def main():
     # Solve the model
     print("\nSolving the model with multiple grids...")
     solver_status = model.solve(PULP_CBC_CMD(msg=0))
+    print("Solver Status:", LpStatus[model.status])
+    print("Objective Value:", model.objective.value())
+    model.writeLP("debug_model.lp")
     gridOutput = []  # This will hold our JSON-friendly output
     if LpStatus[model.status] == "Optimal":
         num_grids = len(grids)
