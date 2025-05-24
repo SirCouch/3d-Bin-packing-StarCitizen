@@ -1,4 +1,3 @@
-import gym
 import numpy as np
 import torch
 import torch.nn as nn
@@ -276,11 +275,10 @@ class MERManager:
         return self.mers
 
     def _filter_redundant_mers(self, mer_dicts):
-        """Filter out redundant MERs (contained within others or too small)"""
-        # Improved filtering method: use a minimum volume threshold
+        """Filter out redundant MERs but ensure at least one remains"""
         min_vol_threshold = 0.01 * self.container.volume
 
-        # Convert dicts to Box3D for easier manipulation
+        # Convert dicts to Box3D
         boxes = [Box3D(m['position'], m['dimensions']) for m in mer_dicts]
 
         non_redundant_indices = []
@@ -293,7 +291,6 @@ class MERManager:
             is_maximal = True
             for j, box_j in enumerate(boxes):
                 if i != j:
-                    # If more than 90% contained, consider redundant
                     intersection = box_i.get_intersection(box_j)
                     if intersection and intersection.volume > 0.9 * box_i.volume:
                         is_maximal = False
@@ -302,7 +299,12 @@ class MERManager:
             if is_maximal:
                 non_redundant_indices.append(i)
 
-        # Return filtered MERs as dictionaries
+        # CRITICAL FIX: Ensure at least one MER remains
+        if len(non_redundant_indices) == 0 and len(mer_dicts) > 0:
+            # Keep the largest MER
+            largest_idx = max(range(len(boxes)), key=lambda i: boxes[i].volume)
+            non_redundant_indices = [largest_idx]
+
         return [mer_dicts[i] for i in non_redundant_indices]
 
     def get_feasible_mers(self, item_dimensions):
@@ -367,24 +369,18 @@ class DRLBinPackingEnv:
         self.total_items = 0
 
     def reset(self, cargo_manifest=None, difficulty=None):
-        """
-        Reset the environment with an optional cargo manifest and difficulty level
+        """Reset the environment with an optional cargo manifest and difficulty level"""
+        # Reset step counter
+        self.steps_in_episode = 0
 
-        Args:
-            cargo_manifest: Optional predefined cargo manifest
-            difficulty: Optional difficulty level (controls number of items)
-
-        Returns:
-            Initial state as PyG Data object
-        """
-        # Reset state components
+        # Rest of the original reset logic...
         self.placed_items = []
         self.mer_manager = MERManager(self.container_dims)
 
-        # Generate cargo manifest based on difficulty if not provided
+        # Generate cargo manifest
         if cargo_manifest is None:
             if difficulty is not None:
-                # Simple curriculum: control number of items based on difficulty
+                # Difficulty-based generation
                 if difficulty == "very-easy":
                     num_items = np.random.randint(1, 3)
                 elif difficulty == "easy":
@@ -398,13 +394,11 @@ class DRLBinPackingEnv:
                 else:  # "very-hard"
                     num_items = np.random.randint(12, 20)
 
-                # Generate manifest with controlled size
                 self.cargo_manifest = sample_cargo_manifest(
                     min_items=num_items,
                     max_items=num_items
                 )
             else:
-                # Default behavior
                 self.cargo_manifest = sample_cargo_manifest()
         else:
             self.cargo_manifest = cargo_manifest
@@ -414,13 +408,12 @@ class DRLBinPackingEnv:
         self.successful_placements = 0
         self.total_items = len(self.cargo_manifest)
 
-        # Set first item as current
+        # Set first item
         if self.cargo_manifest:
             self.current_item = self._get_item_features(self.cargo_manifest[0])
         else:
             self.current_item = None
 
-        # Build and return initial graph state
         return self._build_graph_state()
 
     def _get_item_features(self, item_tuple):
@@ -442,13 +435,32 @@ class DRLBinPackingEnv:
         Returns:
             next_state, reward, done, info
         """
+        # Add timeout check to prevent infinite episodes
+        MAX_STEPS_PER_EPISODE = 1000  # Adjust as needed
+        if not hasattr(self, 'steps_in_episode'):
+            self.steps_in_episode = 0
+
+        self.steps_in_episode += 1
+        if self.steps_in_episode >= MAX_STEPS_PER_EPISODE:
+            print(f"Episode timeout after {MAX_STEPS_PER_EPISODE} steps")
+            return self._build_graph_state(), -10, True, {"error": "Episode timeout"}
+
         if self.current_item is None:
             return self._build_graph_state(), 0, True, {"error": "No item to place"}
 
+        # Check if there are any MERs available
+        if len(self.mer_manager.mers) == 0:
+            print("No MERs available - forcing episode end")
+            return self._build_graph_state(), -10, True, {"error": "No MERs available"}
+
         # Check if action is valid
         if action >= len(self.mer_manager.mers):
-            return self._build_graph_state(), -5, False, {"error": "Invalid MER index"}
+            # Instead of just returning, move to next item
+            self._move_to_next_item()
+            done = self.current_item is None
+            return self._build_graph_state(), -5, done, {"error": "Invalid MER index"}
 
+        # Rest of the original step logic...
         # Get selected MER and item dimensions
         selected_mer = Box3D(
             self.mer_manager.mers[action]['position'],
@@ -458,7 +470,7 @@ class DRLBinPackingEnv:
 
         # Check if placement is feasible
         if not selected_mer.can_fit(item_dims):
-            reward = -5.0  # Reduced penalty for impossible placement
+            reward = -5.0
             self._move_to_next_item()
             done = self.current_item is None
             return self._build_graph_state(), reward, done, {"feasible": False}
@@ -466,7 +478,7 @@ class DRLBinPackingEnv:
         # Place item at MER origin (lower corner)
         placement_position = selected_mer.position.clone()
 
-        # Check additional constraints (access path, stacking, etc.)
+        # Check additional constraints
         feasible = self._check_additional_constraints(
             placement_position,
             item_dims,
@@ -475,12 +487,12 @@ class DRLBinPackingEnv:
         )
 
         if not feasible:
-            reward = -5.0  # Penalty for constraint violation
+            reward = -5.0
             self._move_to_next_item()
             done = self.current_item is None
             return self._build_graph_state(), reward, done, {"feasible": False}
 
-        # Successful placement - create placed item
+        # Successful placement
         placed_item = Box3D(placement_position, item_dims)
         self.placed_items.append({
             'box': placed_item,
@@ -992,8 +1004,8 @@ class CriticGNN(nn.Module):
         return value
 
         # Enhanced training function with experience replay and curriculum learning
-def train_agent(num_episodes=10000, gamma=0.95, lr_actor=1e-5, lr_critic=1e-5,
-                print_interval=100, save_interval=10, checkpoint_path="enhanced_gnn_model_checkpoint.pt",
+def train_agent(num_episodes=10000, gamma=0.95, lr_actor=5e-5, lr_critic=1e-5,
+                print_interval=10, save_interval=10, checkpoint_path="enhanced_gnn_model_checkpoint.pt",
                 batch_size=32, replay_buffer_size=10000, weight_decay=1e-4,
                 possible_container_dims=None):
             """
@@ -1016,14 +1028,12 @@ def train_agent(num_episodes=10000, gamma=0.95, lr_actor=1e-5, lr_critic=1e-5,
                 Trained actor and critic networks, and training statistics
             """
             if possible_container_dims is None:
-                # Default to fixed size if none provided
                 possible_container_dims = [(10, 10, 10)]
 
-            # Initialize replay buffer
+                # Initialize replay buffer
             replay_buffer = ReplayBuffer(capacity=replay_buffer_size)
 
             # Initialize networks
-            # Node feature dimension from environment (assumes consistent feature size)
             temp_env = DRLBinPackingEnv(container_dims=possible_container_dims[0])
             test_state = temp_env.reset()
             node_feature_dim = test_state.x.size(1)
@@ -1032,13 +1042,12 @@ def train_agent(num_episodes=10000, gamma=0.95, lr_actor=1e-5, lr_critic=1e-5,
             actor = ActorGNN(node_feature_dim=node_feature_dim).to(device)
             critic = CriticGNN(node_feature_dim=node_feature_dim).to(device)
 
-            # Optimizers with weight decay for L2 regularization
+            # Optimizers
             optimizer_actor = optim.Adam(actor.parameters(), lr=lr_actor, weight_decay=weight_decay)
             optimizer_critic = optim.Adam(critic.parameters(), lr=lr_critic, weight_decay=weight_decay)
 
             # Learning rate schedulers
-            scheduler_actor = optim.lr_scheduler.ReduceLROnPlateau(optimizer_actor, mode='max', factor=0.5,
-                                                                   patience=50)
+            scheduler_actor = optim.lr_scheduler.ReduceLROnPlateau(optimizer_actor, mode='max', factor=0.5, patience=50)
             scheduler_critic = optim.lr_scheduler.ReduceLROnPlateau(optimizer_critic, mode='max', factor=0.5,
                                                                     patience=50)
 
@@ -1049,73 +1058,90 @@ def train_agent(num_episodes=10000, gamma=0.95, lr_actor=1e-5, lr_critic=1e-5,
             critic_losses = []
             success_rates = deque(maxlen=100)
 
-            # Training loop with curriculum learning
+            # Training loop
             for episode in range(num_episodes):
-                # Determine difficulty based on episode number
+                # Determine difficulty
                 selected_dims = random.choice(possible_container_dims)
                 env = DRLBinPackingEnv(container_dims=selected_dims)
-                if episode < num_episodes * 0.2:  # First 20% - easy
-                    difficulty = "Very Easy"
-                elif episode < num_episodes * 0.3:  # Next 10% - easy
+
+                if episode < num_episodes * 0.2:
+                    difficulty = "very-easy"
+                elif episode < num_episodes * 0.3:
                     difficulty = "easy"
-                elif episode < num_episodes * 0.4:  # Next 30% - medium
+                elif episode < num_episodes * 0.4:
                     difficulty = "medium-low"
-                elif episode < num_episodes * 0.5:  # Next 20% - medium
+                elif episode < num_episodes * 0.5:
                     difficulty = "medium-high"
-                elif episode < num_episodes * 0.8:  # Next 30% - medium
-                    difficulty = "Hard"
-                else:  # Last 50% - hard
+                elif episode < num_episodes * 0.8:
+                    difficulty = "hard"
+                else:
                     difficulty = "very-hard"
 
-                # Reset environment with appropriate difficulty
+                # Reset environment
                 state = env.reset(difficulty=difficulty)
-
                 episode_reward = 0
                 episode_transitions = []
+                steps_in_episode = 0
+                max_steps = 500  # Maximum steps per episode
 
-                # Episode loop
-                while True:
-                    # Get feasibility mask for current item and MERs
+                # Episode loop with timeout
+                while steps_in_episode < max_steps:
+                    steps_in_episode += 1
+
+                    # Get feasibility mask
                     feasibility_mask = env.get_feasibility_mask()
+
+                    # Check if current item exists
+                    if env.current_item is None:
+                        # Episode should end
+                        break
 
                     # Check if there are any feasible actions
                     if np.sum(feasibility_mask) == 0:
-                        # No feasible placements, move to next item
-                        _, reward, done, _ = env.step(0)  # Dummy action, will be rejected
-                        episode_reward += reward
+                        # No feasible placements - skip this item
+                        print(f"No feasible placements for item {env.current_item_idx}/{env.total_items}")
 
-                        if done:
+                        # Force move to next item
+                        env._move_to_next_item()
+
+                        # Check if we're done
+                        if env.current_item is None:
                             break
 
-                        # Continue with next item
+                        # Get new state and continue
+                        state = env._build_graph_state()
                         continue
 
                     # Get action from actor
-                    with torch.no_grad():
-                        action_dist = actor(state, feasibility_mask)
-                        action = action_dist.sample()
-                        log_prob = action_dist.log_prob(action)
+                    try:
+                        with torch.no_grad():
+                            action_dist = actor(state, feasibility_mask)
+                            action = action_dist.sample()
+                            log_prob = action_dist.log_prob(action)
+                    except Exception as e:
+                        print(f"Error in actor forward pass: {e}")
+                        break
 
                     # Take step in environment
-                    next_state, reward, done, _ = env.step(action.item())
+                    try:
+                        next_state, reward, done, info = env.step(action.item())
+                    except Exception as e:
+                        print(f"Error in environment step: {e}")
+                        break
+
                     episode_reward += reward
 
-                    # Store transition in replay buffer
+                    # Store transition
                     replay_buffer.push(
                         state, action.item(), reward,
                         next_state if not done else None,
                         done, log_prob, feasibility_mask
                     )
 
-                    # Store transition for episode-based updates
                     episode_transitions.append((
-                        state,
-                        action,
-                        reward,
+                        state, action, reward,
                         next_state if not done else None,
-                        log_prob,
-                        done,
-                        feasibility_mask
+                        log_prob, done, feasibility_mask
                     ))
 
                     # Update state
@@ -1125,8 +1151,13 @@ def train_agent(num_episodes=10000, gamma=0.95, lr_actor=1e-5, lr_critic=1e-5,
                     if done:
                         break
 
+                # Log if episode was terminated due to timeout
+                if steps_in_episode >= max_steps:
+                    print(f"Episode {episode} terminated due to timeout after {steps_in_episode} steps")
+
                 # Skip update if episode was too short
                 if len(episode_transitions) < 2:
+                    print(f"Episode {episode} too short ({len(episode_transitions)} transitions), skipping update")
                     continue
 
                 # Perform batch updates from replay buffer
@@ -1285,24 +1316,12 @@ def train_agent(num_episodes=10000, gamma=0.95, lr_actor=1e-5, lr_critic=1e-5,
                         critic_loss_avg = 0
 
                 # Track metrics
-                if isinstance(episode_reward, torch.Tensor):
-                    episode_reward = episode_reward.detach().cpu().item()
-                episode_rewards.append(episode_reward)
-                avg_rewards.append(episode_reward)
-                actor_losses.append(actor_loss_avg)
-                critic_losses.append(critic_loss_avg)
+                episode_rewards.append(float(episode_reward))
+                avg_rewards.append(float(episode_reward))
 
-                # Calculate success rate (successful placements / total items)
+                # Calculate success rate
                 success_rate = env.successful_placements / env.total_items if env.total_items > 0 else 0
                 success_rates.append(success_rate)
-
-                # Update learning rate schedulers
-                if episode % 10 == 0:
-                    # Make sure we're working with CPU data when calling numpy
-                    rewards_cpu = [r.cpu().item() if isinstance(r, torch.Tensor) else r for r in avg_rewards]
-                    mean_reward = np.mean(rewards_cpu)
-                    scheduler_actor.step(mean_reward)
-                    scheduler_critic.step(mean_reward)
 
                 # Print progress
                 if (episode + 1) % print_interval == 0:
@@ -1313,8 +1332,7 @@ def train_agent(num_episodes=10000, gamma=0.95, lr_actor=1e-5, lr_critic=1e-5,
                           f"Difficulty: {difficulty} | "
                           f"Avg Reward: {avg_reward:.2f} | "
                           f"Success Rate: {avg_success:.2f} | "
-                          f"Actor Loss: {actor_loss_avg:.4f} | "
-                          f"Critic Loss: {critic_loss_avg:.4f}")
+                          f"Steps: {steps_in_episode}")
 
                 # Save checkpoint
                 if (episode + 1) % save_interval == 0:
@@ -1329,15 +1347,69 @@ def train_agent(num_episodes=10000, gamma=0.95, lr_actor=1e-5, lr_critic=1e-5,
                         'critic_losses': critic_losses
                     }, checkpoint_path)
 
-            # Plot training curves
-            plot_training_curves(episode_rewards, actor_losses, critic_losses)
-
             return actor, critic, {
                 'episode_rewards': episode_rewards,
                 'actor_losses': actor_losses,
                 'critic_losses': critic_losses
             }
 
+
+def debug_mer_state(env):
+    """Helper function to debug MER state"""
+    print(f"\n=== MER Debug Info ===")
+    print(f"Number of MERs: {len(env.mer_manager.mers)}")
+    print(f"Current item index: {env.current_item_idx}/{env.total_items}")
+    print(f"Successful placements: {env.successful_placements}")
+
+    if env.current_item:
+        print(f"Current item dimensions: {env.current_item['dimensions'].tolist()}")
+        feasible_mers = env.mer_manager.get_feasible_mers(env.current_item['dimensions'])
+        print(f"Feasible MERs: {len(feasible_mers)} out of {len(env.mer_manager.mers)}")
+
+    # Check for very small MERs
+    if len(env.mer_manager.mers) > 0:
+        volumes = []
+        for mer_dict in env.mer_manager.mers:
+            mer = Box3D(mer_dict['position'], mer_dict['dimensions'])
+            volumes.append(mer.volume.item())
+        print(f"MER volumes: min={min(volumes):.2f}, max={max(volumes):.2f}, avg={np.mean(volumes):.2f}")
+    print("=====================\n")
+
+
+## 5. Modified _filter_redundant_mers to prevent empty MER list
+
+def _filter_redundant_mers(self, mer_dicts):
+    """Filter out redundant MERs but ensure at least one remains"""
+    min_vol_threshold = 0.01 * self.container.volume
+
+    # Convert dicts to Box3D
+    boxes = [Box3D(m['position'], m['dimensions']) for m in mer_dicts]
+
+    non_redundant_indices = []
+    for i, box_i in enumerate(boxes):
+        # Skip boxes with negligible volume
+        if box_i.volume < min_vol_threshold:
+            continue
+
+        # Check for near-redundancy
+        is_maximal = True
+        for j, box_j in enumerate(boxes):
+            if i != j:
+                intersection = box_i.get_intersection(box_j)
+                if intersection and intersection.volume > 0.9 * box_i.volume:
+                    is_maximal = False
+                    break
+
+        if is_maximal:
+            non_redundant_indices.append(i)
+
+    # Ensure at least one MER remains
+    if len(non_redundant_indices) == 0 and len(mer_dicts) > 0:
+        # Keep the largest MER
+        largest_idx = max(range(len(boxes)), key=lambda i: boxes[i].volume)
+        non_redundant_indices = [largest_idx]
+
+    return [mer_dicts[i] for i in non_redundant_indices]
 def plot_training_curves(rewards, actor_losses, critic_losses):
             """Plot training metrics"""
             plt.figure(figsize=(15, 5))
@@ -1597,9 +1669,9 @@ if __name__ == "__main__":
                 possible_container_dims=POSSIBLE_DIMS,
                 num_episodes=10000,
                 gamma=0.95,
-                lr_actor=1e-5,
+                lr_actor=5e-5,
                 lr_critic=1e-5,
-                print_interval=100,
+                print_interval=10,
                 save_interval=10,
                 batch_size=32,
                 replay_buffer_size=10000,
