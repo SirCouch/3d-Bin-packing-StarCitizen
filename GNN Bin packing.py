@@ -1,4 +1,3 @@
-import gym
 import numpy as np
 import torch
 import torch.nn as nn
@@ -14,7 +13,14 @@ from torch_geometric.nn import global_mean_pool, GATConv
 import torch.nn.functional as F
 
 # Import from existing bin packing modules (adjust as needed)
-from cargo_manifest_generator import sample_cargo_manifest
+from scu_manifest_generator import (
+    generate_scu_manifest,
+    manifest_to_item_list,
+    generate_training_batch,
+    GRID_CATEGORIES,
+    get_grid_category,
+    print_manifest_summary
+)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
@@ -276,11 +282,10 @@ class MERManager:
         return self.mers
 
     def _filter_redundant_mers(self, mer_dicts):
-        """Filter out redundant MERs (contained within others or too small)"""
-        # Improved filtering method: use a minimum volume threshold
+        """Filter out redundant MERs but ensure at least one remains"""
         min_vol_threshold = 0.01 * self.container.volume
 
-        # Convert dicts to Box3D for easier manipulation
+        # Convert dicts to Box3D
         boxes = [Box3D(m['position'], m['dimensions']) for m in mer_dicts]
 
         non_redundant_indices = []
@@ -293,7 +298,6 @@ class MERManager:
             is_maximal = True
             for j, box_j in enumerate(boxes):
                 if i != j:
-                    # If more than 90% contained, consider redundant
                     intersection = box_i.get_intersection(box_j)
                     if intersection and intersection.volume > 0.9 * box_i.volume:
                         is_maximal = False
@@ -302,7 +306,12 @@ class MERManager:
             if is_maximal:
                 non_redundant_indices.append(i)
 
-        # Return filtered MERs as dictionaries
+        # CRITICAL FIX: Ensure at least one MER remains
+        if len(non_redundant_indices) == 0 and len(mer_dicts) > 0:
+            # Keep the largest MER
+            largest_idx = max(range(len(boxes)), key=lambda i: boxes[i].volume)
+            non_redundant_indices = [largest_idx]
+
         return [mer_dicts[i] for i in non_redundant_indices]
 
     def get_feasible_mers(self, item_dimensions):
@@ -367,45 +376,38 @@ class DRLBinPackingEnv:
         self.total_items = 0
 
     def reset(self, cargo_manifest=None, difficulty=None):
-        """
-        Reset the environment with an optional cargo manifest and difficulty level
+        """Reset the environment with an optional cargo manifest and difficulty level"""
+        # Reset step counter
+        self.steps_in_episode = 0
 
-        Args:
-            cargo_manifest: Optional predefined cargo manifest
-            difficulty: Optional difficulty level (controls number of items)
-
-        Returns:
-            Initial state as PyG Data object
-        """
-        # Reset state components
+        # Rest of the original reset logic...
         self.placed_items = []
         self.mer_manager = MERManager(self.container_dims)
 
-        # Generate cargo manifest based on difficulty if not provided
+        # Generate cargo manifest
         if cargo_manifest is None:
-            if difficulty is not None:
-                # Simple curriculum: control number of items based on difficulty
-                if difficulty == "very-easy":
-                    num_items = np.random.randint(1, 3)
-                elif difficulty == "easy":
-                    num_items = np.random.randint(3, 6)
-                elif difficulty == "medium-low":
-                    num_items = np.random.randint(5, 8)
-                elif difficulty == "medium-high":
-                    num_items = np.random.randint(7, 12)
-                elif difficulty == "hard":
-                    num_items = np.random.randint(10, 15)
-                else:  # "very-hard"
-                    num_items = np.random.randint(12, 20)
+            # Use SCU manifest generator instead of the old one
+            from scu_manifest_generator import generate_scu_manifest, manifest_to_item_list
 
-                # Generate manifest with controlled size
-                self.cargo_manifest = sample_cargo_manifest(
-                    min_items=num_items,
-                    max_items=num_items
+            # Generate manifest based on difficulty
+            if difficulty is not None:
+                fill_ratio = 0.7  # Default fill ratio
+                manifest = generate_scu_manifest(
+                    grid_dims=tuple(self.container_dims.tolist()),
+                    target_fill_ratio=fill_ratio,
+                    difficulty=difficulty,
+                    priority_groups=3
                 )
+                self.cargo_manifest = manifest_to_item_list(manifest)
             else:
-                # Default behavior
-                self.cargo_manifest = sample_cargo_manifest()
+                # Generate a medium difficulty manifest by default
+                manifest = generate_scu_manifest(
+                    grid_dims=tuple(self.container_dims.tolist()),
+                    target_fill_ratio=0.7,
+                    difficulty="medium",
+                    priority_groups=3
+                )
+                self.cargo_manifest = manifest_to_item_list(manifest)
         else:
             self.cargo_manifest = cargo_manifest
 
@@ -414,13 +416,12 @@ class DRLBinPackingEnv:
         self.successful_placements = 0
         self.total_items = len(self.cargo_manifest)
 
-        # Set first item as current
+        # Set first item
         if self.cargo_manifest:
             self.current_item = self._get_item_features(self.cargo_manifest[0])
         else:
             self.current_item = None
 
-        # Build and return initial graph state
         return self._build_graph_state()
 
     def _get_item_features(self, item_tuple):
@@ -442,13 +443,32 @@ class DRLBinPackingEnv:
         Returns:
             next_state, reward, done, info
         """
+        # Add timeout check to prevent infinite episodes
+        MAX_STEPS_PER_EPISODE = 1000  # Adjust as needed
+        if not hasattr(self, 'steps_in_episode'):
+            self.steps_in_episode = 0
+
+        self.steps_in_episode += 1
+        if self.steps_in_episode >= MAX_STEPS_PER_EPISODE:
+            print(f"Episode timeout after {MAX_STEPS_PER_EPISODE} steps")
+            return self._build_graph_state(), -10, True, {"error": "Episode timeout"}
+
         if self.current_item is None:
             return self._build_graph_state(), 0, True, {"error": "No item to place"}
 
+        # Check if there are any MERs available
+        if len(self.mer_manager.mers) == 0:
+            print("No MERs available - forcing episode end")
+            return self._build_graph_state(), -10, True, {"error": "No MERs available"}
+
         # Check if action is valid
         if action >= len(self.mer_manager.mers):
-            return self._build_graph_state(), -5, False, {"error": "Invalid MER index"}
+            # Instead of just returning, move to next item
+            self._move_to_next_item()
+            done = self.current_item is None
+            return self._build_graph_state(), -5, done, {"error": "Invalid MER index"}
 
+        # Rest of the original step logic...
         # Get selected MER and item dimensions
         selected_mer = Box3D(
             self.mer_manager.mers[action]['position'],
@@ -458,7 +478,7 @@ class DRLBinPackingEnv:
 
         # Check if placement is feasible
         if not selected_mer.can_fit(item_dims):
-            reward = -5.0  # Reduced penalty for impossible placement
+            reward = -5.0
             self._move_to_next_item()
             done = self.current_item is None
             return self._build_graph_state(), reward, done, {"feasible": False}
@@ -466,7 +486,7 @@ class DRLBinPackingEnv:
         # Place item at MER origin (lower corner)
         placement_position = selected_mer.position.clone()
 
-        # Check additional constraints (access path, stacking, etc.)
+        # Check additional constraints
         feasible = self._check_additional_constraints(
             placement_position,
             item_dims,
@@ -475,12 +495,12 @@ class DRLBinPackingEnv:
         )
 
         if not feasible:
-            reward = -5.0  # Penalty for constraint violation
+            reward = -5.0
             self._move_to_next_item()
             done = self.current_item is None
             return self._build_graph_state(), reward, done, {"feasible": False}
 
-        # Successful placement - create placed item
+        # Successful placement
         placed_item = Box3D(placement_position, item_dims)
         self.placed_items.append({
             'box': placed_item,
@@ -992,623 +1012,608 @@ class CriticGNN(nn.Module):
         return value
 
         # Enhanced training function with experience replay and curriculum learning
-def train_agent(num_episodes=10000, gamma=0.95, lr_actor=1e-5, lr_critic=1e-5,
-                print_interval=100, save_interval=10, checkpoint_path="enhanced_gnn_model_checkpoint.pt",
-                batch_size=32, replay_buffer_size=10000, weight_decay=1e-4,
-                possible_container_dims=None):
-            """
-            Train the GNN-based DRL agent using advanced techniques
 
-            Args:
-                env: DRLBinPackingEnv instance
-                num_episodes: Number of episodes to train for
-                gamma: Discount factor
-                lr_actor: Learning rate for actor network
-                lr_critic: Learning rate for critic network
-                print_interval: How often to print training progress
-                save_interval: How often to save model checkpoints
-                checkpoint_path: Path to save checkpoints
-                batch_size: Batch size for updates from replay buffer
-                replay_buffer_size: Capacity of experience replay buffer
-                weight_decay: L2 regularization strength
-
-            Returns:
-                Trained actor and critic networks, and training statistics
-            """
-            if possible_container_dims is None:
-                # Default to fixed size if none provided
-                possible_container_dims = [(10, 10, 10)]
-
-            # Initialize replay buffer
-            replay_buffer = ReplayBuffer(capacity=replay_buffer_size)
-
-            # Initialize networks
-            # Node feature dimension from environment (assumes consistent feature size)
-            temp_env = DRLBinPackingEnv(container_dims=possible_container_dims[0])
-            test_state = temp_env.reset()
-            node_feature_dim = test_state.x.size(1)
-            del temp_env
-
-            actor = ActorGNN(node_feature_dim=node_feature_dim).to(device)
-            critic = CriticGNN(node_feature_dim=node_feature_dim).to(device)
-
-            # Optimizers with weight decay for L2 regularization
-            optimizer_actor = optim.Adam(actor.parameters(), lr=lr_actor, weight_decay=weight_decay)
-            optimizer_critic = optim.Adam(critic.parameters(), lr=lr_critic, weight_decay=weight_decay)
-
-            # Learning rate schedulers
-            scheduler_actor = optim.lr_scheduler.ReduceLROnPlateau(optimizer_actor, mode='max', factor=0.5,
-                                                                   patience=50)
-            scheduler_critic = optim.lr_scheduler.ReduceLROnPlateau(optimizer_critic, mode='max', factor=0.5,
-                                                                    patience=50)
-
-            # Training metrics
-            episode_rewards = []
-            avg_rewards = deque(maxlen=100)
-            actor_losses = []
-            critic_losses = []
-            success_rates = deque(maxlen=100)
-
-            # Training loop with curriculum learning
-            for episode in range(num_episodes):
-                # Determine difficulty based on episode number
-                selected_dims = random.choice(possible_container_dims)
-                env = DRLBinPackingEnv(container_dims=selected_dims)
-                if episode < num_episodes * 0.2:  # First 20% - easy
-                    difficulty = "Very Easy"
-                elif episode < num_episodes * 0.3:  # Next 10% - easy
-                    difficulty = "easy"
-                elif episode < num_episodes * 0.4:  # Next 30% - medium
-                    difficulty = "medium-low"
-                elif episode < num_episodes * 0.5:  # Next 20% - medium
-                    difficulty = "medium-high"
-                elif episode < num_episodes * 0.8:  # Next 30% - medium
-                    difficulty = "Hard"
-                else:  # Last 50% - hard
-                    difficulty = "very-hard"
-
-                # Reset environment with appropriate difficulty
-                state = env.reset(difficulty=difficulty)
-
-                episode_reward = 0
-                episode_transitions = []
-
-                # Episode loop
-                while True:
-                    # Get feasibility mask for current item and MERs
-                    feasibility_mask = env.get_feasibility_mask()
-
-                    # Check if there are any feasible actions
-                    if np.sum(feasibility_mask) == 0:
-                        # No feasible placements, move to next item
-                        _, reward, done, _ = env.step(0)  # Dummy action, will be rejected
-                        episode_reward += reward
-
-                        if done:
-                            break
-
-                        # Continue with next item
-                        continue
-
-                    # Get action from actor
-                    with torch.no_grad():
-                        action_dist = actor(state, feasibility_mask)
-                        action = action_dist.sample()
-                        log_prob = action_dist.log_prob(action)
-
-                    # Take step in environment
-                    next_state, reward, done, _ = env.step(action.item())
-                    episode_reward += reward
-
-                    # Store transition in replay buffer
-                    replay_buffer.push(
-                        state, action.item(), reward,
-                        next_state if not done else None,
-                        done, log_prob, feasibility_mask
-                    )
-
-                    # Store transition for episode-based updates
-                    episode_transitions.append((
-                        state,
-                        action,
-                        reward,
-                        next_state if not done else None,
-                        log_prob,
-                        done,
-                        feasibility_mask
-                    ))
-
-                    # Update state
-                    state = next_state
-
-                    # Break if episode is done
-                    if done:
-                        break
-
-                # Skip update if episode was too short
-                if len(episode_transitions) < 2:
-                    continue
-
-                # Perform batch updates from replay buffer
-                if len(replay_buffer) >= batch_size:
-                    # Sample batch of transitions
-                    states, actions, rewards, next_states, dones, _, _ = replay_buffer.sample(batch_size)
-
-                    # Process states in batches (handle variable sized graphs)
-                    # For simplicity in this implementation, we'll update one by one
-                    actor_loss_total = 0
-                    critic_loss_total = 0
-
-                    for i in range(len(states)):
-                        state = states[i]
-                        action_from_buffer = actions[i]  # Renaming to avoid confusion with action_dist.sample()
-                        reward = rewards[i].item()  # Get scalar
-                        next_state = next_states[i]  # PyG Data or None
-                        done = dones[i].item()  # Get scalar
-
-                        # --- Calculate current state's value and target value ---
-                        try:
-                            # 1. Get value of current state
-                            current_value_q = critic(state).squeeze()  # Calculate current state value, ensure scalar
-                            current_device = current_value_q.device
-
-                            # 2. Calculate target value (Q-target)
-                            with torch.no_grad():
-                                if next_state is not None:
-                                    next_value_q = critic(next_state).squeeze()  # Ensure scalar
-                                    reward_t = torch.tensor(reward, dtype=torch.float, device=current_device)
-                                    done_t = torch.tensor(float(done), dtype=torch.float, device=current_device)
-                                    target_q_value = reward_t + gamma * next_value_q * (1.0 - done_t)  # Scalar
-                                else:  # Terminal state
-                                    target_q_value = torch.tensor(reward, dtype=torch.float,
-                                                                  device=current_device)  # Scalar
-
-                            # --- Line 1217 (or close) context ---
-                            # Update Critic:
-                            # 'current_value_q' is the output of critic(state) for the loss
-                            # 'target_q_value' is the target it should predict
-                            critic_loss = F.mse_loss(current_value_q, target_q_value)  # Both should be scalar
-
-                            optimizer_critic.zero_grad()
-                            critic_loss.backward()
-                            torch.nn.utils.clip_grad_norm_(critic.parameters(), max_norm=0.5)
-                            optimizer_critic.step()
-
-                            # --- Calculate Advantage (for Actor update) ---
-                            with torch.no_grad():
-                                advantage = target_q_value - current_value_q  # Both scalar
-
-                            # --- Actor Update ---
-                            # Re-evaluate action distribution for the current state for PPO/A2C (if log_prob from buffer is not used)
-                            # If using log_prob from buffer, you'd typically use an importance sampling ratio.
-                            # For simple A2C-style from replay:
-                            action_dist = actor(state, None)  # Pass original feasibility_mask if stored & needed
-                            # action_from_buffer is the action taken at that time
-                            action_tensor = torch.tensor(action_from_buffer.item(),
-                                                         device=current_device) if isinstance(action_from_buffer,
-                                                                                              torch.Tensor) else torch.tensor(
-                                action_from_buffer, device=current_device)
-
-                            log_prob = action_dist.log_prob(action_tensor)
-                            actor_loss = -log_prob * advantage.detach()  # advantage is scalar
-
-                            optimizer_actor.zero_grad()
-                            actor_loss.backward()
-                            torch.nn.utils.clip_grad_norm_(actor.parameters(), max_norm=0.5)
-                            optimizer_actor.step()
-
-                            actor_loss_total += actor_loss.item()
-                            critic_loss_total += critic_loss.item()
-
-                        except Exception as e:
-                            print(f"ERROR during replay buffer update for transition {i}: {e}")
-                            # Potentially skip this problematic transition or batch
-                            # For now, let's just print and continue to avoid halting training
-                            # but you'll lose this update.
-                            # You might want to re-calculate actor_loss_avg and critic_loss_avg more carefully if continuing.
-                            if len(states) > 0:  # Avoid division by zero if error on first item
-                                actor_loss_avg = actor_loss_total / (i + 1) if (i + 1) <= len(
-                                    states) else actor_loss_total / len(states)
-                                critic_loss_avg = critic_loss_total / (i + 1) if (i + 1) <= len(
-                                    states) else critic_loss_total / len(states)
-                            else:
-                                actor_loss_avg = 0
-                                critic_loss_avg = 0
-                            continue  # Skip to the next transition in the batch
-
-                    # Average losses over batch (after the loop)
-                    if len(states) > 0:  # Ensure states is not empty before division
-                        actor_loss_avg = actor_loss_total / len(states)
-                        critic_loss_avg = critic_loss_total / len(states)
-                    else:
-                        actor_loss_avg = 0
-                        critic_loss_avg = 0
-                else:
-                    # If not enough samples in buffer, use episode-based updates
-                    # Calculate returns and advantages
-                    returns = []
-                    advantages = []
-
-                    # Compute critic values for all states
-                    states = [t[0] for t in episode_transitions]
-                    with torch.no_grad():
-                        values = [critic(s).item() for s in states]
-
-                    # Compute returns and advantages
-                    G = 0
-                    for i in reversed(range(len(episode_transitions))):
-                        _, _, reward, _, _, done, _ = episode_transitions[i]
-                        G = reward + gamma * G * (1 - int(done))
-                        returns.insert(0, G)
-                        advantages.insert(0, G - values[i])
-
-                    returns = torch.tensor(returns, dtype=torch.float, device=device)
-                    advantages = torch.tensor(advantages, dtype=torch.float, device=device)
-
-                    # Normalize advantages
-                    if len(advantages) > 1:
-                        advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
-
-                    # Update actor and critic
-                    actor_loss_total = 0
-                    critic_loss_total = 0
-
-                    for i, (state, action, _, _, log_prob, _, _) in enumerate(episode_transitions):
-                        # Actor update
-                        action_dist = actor(state, None)  # No feasibility mask during update
-                        new_log_prob = action_dist.log_prob(action)
-                        actor_loss = -new_log_prob * advantages[i]
-
-                        optimizer_actor.zero_grad()
-                        actor_loss.backward()
-                        torch.nn.utils.clip_grad_norm_(actor.parameters(), max_norm=0.5)
-                        optimizer_actor.step()
-
-                        # Critic update
-                        value = critic(state).squeeze()
-                        critic_loss = F.mse_loss(value, returns[i])
-
-                        optimizer_critic.zero_grad()
-                        critic_loss.backward()
-                        torch.nn.utils.clip_grad_norm_(critic.parameters(), max_norm=0.5)
-                        optimizer_critic.step()
-
-                        actor_loss_total += actor_loss.item()
-                        critic_loss_total += critic_loss.item()
-
-                    # Average losses over episode
-                    if len(episode_transitions) > 0:
-                        actor_loss_avg = actor_loss_total / len(episode_transitions)
-                        critic_loss_avg = critic_loss_total / len(episode_transitions)
-                    else:
-                        actor_loss_avg = 0
-                        critic_loss_avg = 0
-
-                # Track metrics
-                if isinstance(episode_reward, torch.Tensor):
-                    episode_reward = episode_reward.detach().cpu().item()
-                episode_rewards.append(episode_reward)
-                avg_rewards.append(episode_reward)
-                actor_losses.append(actor_loss_avg)
-                critic_losses.append(critic_loss_avg)
-
-                # Calculate success rate (successful placements / total items)
-                success_rate = env.successful_placements / env.total_items if env.total_items > 0 else 0
-                success_rates.append(success_rate)
-
-                # Update learning rate schedulers
-                if episode % 10 == 0:
-                    # Make sure we're working with CPU data when calling numpy
-                    rewards_cpu = [r.cpu().item() if isinstance(r, torch.Tensor) else r for r in avg_rewards]
-                    mean_reward = np.mean(rewards_cpu)
-                    scheduler_actor.step(mean_reward)
-                    scheduler_critic.step(mean_reward)
-
-                # Print progress
-                if (episode + 1) % print_interval == 0:
-                    avg_reward = np.mean(list(avg_rewards))
-                    avg_success = np.mean(list(success_rates))
-                    print(f"Episode {episode + 1}/{num_episodes} | "
-                          f"Dims: {selected_dims} | "
-                          f"Difficulty: {difficulty} | "
-                          f"Avg Reward: {avg_reward:.2f} | "
-                          f"Success Rate: {avg_success:.2f} | "
-                          f"Actor Loss: {actor_loss_avg:.4f} | "
-                          f"Critic Loss: {critic_loss_avg:.4f}")
-
-                # Save checkpoint
-                if (episode + 1) % save_interval == 0:
-                    torch.save({
-                        'episode': episode,
-                        'actor_state_dict': actor.state_dict(),
-                        'critic_state_dict': critic.state_dict(),
-                        'optimizer_actor_state_dict': optimizer_actor.state_dict(),
-                        'optimizer_critic_state_dict': optimizer_critic.state_dict(),
-                        'episode_rewards': episode_rewards,
-                        'actor_losses': actor_losses,
-                        'critic_losses': critic_losses
-                    }, checkpoint_path)
-
-            # Plot training curves
-            plot_training_curves(episode_rewards, actor_losses, critic_losses)
-
-            return actor, critic, {
-                'episode_rewards': episode_rewards,
-                'actor_losses': actor_losses,
-                'critic_losses': critic_losses
-            }
-
-def plot_training_curves(rewards, actor_losses, critic_losses):
-            """Plot training metrics"""
-            plt.figure(figsize=(15, 5))
-
-            plt.subplot(1, 3, 1)
-            plt.plot(rewards)
-            plt.title('Episode Rewards')
-            plt.xlabel('Episode')
-            plt.ylabel('Reward')
-
-            plt.subplot(1, 3, 2)
-            plt.plot(actor_losses)
-            plt.title('Actor Loss')
-            plt.xlabel('Episode')
-            plt.ylabel('Loss')
-
-            plt.subplot(1, 3, 3)
-            plt.plot(critic_losses)
-            plt.title('Critic Loss')
-            plt.xlabel('Episode')
-            plt.ylabel('Loss')
-
-            plt.tight_layout()
-            plt.savefig('enhanced_gnn_training_curves.png')
-            plt.show()
-
-def evaluate_agent(env, actor, num_episodes=10, visualize=False):
-            """
-            Evaluate the trained GNN agent
-
-            Args:
-                env: DRLBinPackingEnv instance
-                actor: Trained actor network
-                num_episodes: Number of episodes to evaluate
-                visualize: Whether to visualize the final packing
-
-            Returns:
-                Average reward and success rate
-            """
-            episode_rewards = []
-            success_rates = []
-            volume_utilizations = []
-
-            for episode in range(num_episodes):
-                state = env.reset(difficulty="hard")  # Evaluate on hard difficulty
-                episode_reward = 0
-                total_item_volume = 0
-                container_volume = torch.prod(env.container_dims).item()
-
-                # Episode loop
-                while True:
-                    # Get feasibility mask
-                    feasibility_mask = env.get_feasibility_mask()
-
-                    # Check if there are any feasible actions
-                    if np.sum(feasibility_mask) == 0:
-                        # No feasible placements, move to next item
-                        _, reward, done, _ = env.step(0)  # Dummy action
-                        episode_reward += reward
-
-                        if done:
-                            break
-
-                        # Continue with next item
-                        continue
-
-                    # Get action from actor (greedy)
-                    with torch.no_grad():
-                        action_dist = actor(state, feasibility_mask)
-                        # Select action with highest probability
-                        action = torch.argmax(action_dist.probs)
-
-                    # Take step in environment
-                    next_state, reward, done, _ = env.step(action.item())
-                    episode_reward += reward
-
-                    # If successful placement, add volume
-                    if env.successful_placements > 0 and env.current_item_idx > 0:
-                        prev_item = env.cargo_manifest[env.current_item_idx - 1]
-                        w, l, h, _, _ = prev_item
-                        total_item_volume += w * l * h
-
-                    # Update state
-                    state = next_state
-
-                    # Break if episode is done
-                    if done:
-                        break
-
-                # Calculate metrics
-                success_rate = env.successful_placements / env.total_items if env.total_items > 0 else 0
-                volume_utilization = total_item_volume / container_volume
-
-                episode_rewards.append(episode_reward)
-                success_rates.append(success_rate)
-                volume_utilizations.append(volume_utilization)
-
-                # Optional: Visualize final packing
-                if visualize and episode == 0:  # Visualize first episode
-                    visualize_packing(env)
-
-            avg_reward = np.mean(episode_rewards)
-            avg_success_rate = np.mean(success_rates)
-            avg_volume_utilization = np.mean(volume_utilizations)
-
-            print(f"Evaluation over {num_episodes} episodes:")
-            print(f"Average Reward: {avg_reward:.2f}")
-            print(f"Average Success Rate: {avg_success_rate:.2f}")
-            print(f"Average Volume Utilization: {avg_volume_utilization:.2f}")
-
-            return avg_reward, avg_success_rate, avg_volume_utilization
-
-def visualize_packing(env):
+def train_agent_with_scu(
+        num_episodes=1000,
+        gamma=0.95,
+        lr_actor=5e-5,
+        lr_critic=1e-5,
+        print_interval=10,
+        save_interval=10,
+        checkpoint_path="scu_gnn_model_checkpoint.pt",
+        batch_size=32,
+        replay_buffer_size=1000,
+        weight_decay=1e-4,
+        grid_category_rotation=True
+):
     """
-    Visualize the 3D bin packing result
-    Requires matplotlib and possibly mplot3d
+    Train the GNN-based DRL agent using SCU manifests and grid categories
+
+    Args:
+        num_episodes: Number of episodes to train for
+        gamma: Discount factor
+        lr_actor: Learning rate for actor network
+        lr_critic: Learning rate for critic network
+        print_interval: How often to print training progress
+        save_interval: How often to save model checkpoints
+        checkpoint_path: Path to save checkpoints
+        batch_size: Batch size for updates from replay buffer
+        replay_buffer_size: Capacity of experience replay buffer
+        weight_decay: L2 regularization strength
+        grid_category_rotation: Whether to rotate between grid categories during training
+
+    Returns:
+        Trained actor and critic networks, and training statistics
     """
-    try:
-        from mpl_toolkits.mplot3d import Axes3D
-        from mpl_toolkits.mplot3d.art3d import Poly3DCollection
-        import matplotlib.pyplot as plt
-        import numpy as np
+    # Initialize replay buffer
+    replay_buffer = ReplayBuffer(capacity=replay_buffer_size)
 
-        fig = plt.figure(figsize=(10, 8))
-        ax = fig.add_subplot(111, projection='3d')
+    # Initialize networks
+    # Use a medium-sized grid to determine feature dimensions
+    temp_env = DRLBinPackingEnv(container_dims=(8, 8, 8))
+    test_state = temp_env.reset()
+    node_feature_dim = test_state.x.size(1)
+    del temp_env
 
-        # Plot container boundaries
-        container_width, container_length, container_height = [x.item() for x in env.container_dims]
+    actor = ActorGNN(node_feature_dim=node_feature_dim).to(device)
+    critic = CriticGNN(node_feature_dim=node_feature_dim).to(device)
 
-        # Define the vertices of the container
-        vertices = [
-            [0, 0, 0],
-            [container_width, 0, 0],
-            [container_width, container_length, 0],
-            [0, container_length, 0],
-            [0, 0, container_height],
-            [container_width, 0, container_height],
-            [container_width, container_length, container_height],
-            [0, container_length, container_height]
-        ]
+    # Optimizers
+    optimizer_actor = optim.Adam(actor.parameters(), lr=lr_actor, weight_decay=weight_decay)
+    optimizer_critic = optim.Adam(critic.parameters(), lr=lr_critic, weight_decay=weight_decay)
 
-        # Define the faces of the container
-        faces = [
-            [vertices[0], vertices[1], vertices[2], vertices[3]],  # Bottom
-            [vertices[4], vertices[5], vertices[6], vertices[7]],  # Top
-            [vertices[0], vertices[1], vertices[5], vertices[4]],  # Front
-            [vertices[2], vertices[3], vertices[7], vertices[6]],  # Back
-            [vertices[0], vertices[3], vertices[7], vertices[4]],  # Left
-            [vertices[1], vertices[2], vertices[6], vertices[5]]  # Right
-        ]
+    # Learning rate schedulers
+    scheduler_actor = optim.lr_scheduler.ReduceLROnPlateau(optimizer_actor, mode='max', factor=0.5, patience=50)
+    scheduler_critic = optim.lr_scheduler.ReduceLROnPlateau(optimizer_critic, mode='max', factor=0.5, patience=50)
 
-        # Plot container as wireframe
-        for face in faces:
-            face_array = np.array(face)
-            ax.plot3D(face_array[:, 0], face_array[:, 1], face_array[:, 2], 'k-', alpha=0.2)
+    # Training metrics
+    episode_rewards = []
+    avg_rewards = deque(maxlen=100)
+    actor_losses = []
+    critic_losses = []
+    success_rates = deque(maxlen=100)
+    category_performance = {cat: deque(maxlen=50) for cat in ["small", "medium", "large"]}
 
-        # Plot placed items
-        for i, placed in enumerate(env.placed_items):
-            box = placed['box']
-            priority = placed['priority']
-
-            # Define the vertices of the box
-            x, y, z = box.position
-            w, l, h = box.dimensions
-
-            box_vertices = [
-                [x, y, z],
-                [x + w, y, z],
-                [x + w, y + l, z],
-                [x, y + l, z],
-                [x, y, z + h],
-                [x + w, y, z + h],
-                [x + w, y + l, z + h],
-                [x, y + l, z + h]
-            ]
-
-        # Define the faces of the box
-            box_faces = [
-                [box_vertices[0], box_vertices[1], box_vertices[2], box_vertices[3]],  # Bottom
-                [box_vertices[4], box_vertices[5], box_vertices[6], box_vertices[7]],  # Top
-                [box_vertices[0], box_vertices[1], box_vertices[5], box_vertices[4]],  # Front
-                [box_vertices[2], box_vertices[3], box_vertices[7], box_vertices[6]],  # Back
-                [box_vertices[0], box_vertices[3], box_vertices[7], box_vertices[4]],  # Left
-                [box_vertices[1], box_vertices[2], box_vertices[6], box_vertices[5]]  # Right
-            ]
-
-        # Color based on priority (1-5)
-            cmap = plt.cm.get_cmap('viridis')
-            color = cmap((priority - 1) / 4)  # normalize to [0, 1]
-
-            # Create a 3D collection of polygons
-            box_collection = Poly3DCollection(box_faces, alpha=0.7)
-            box_collection.set_facecolor(color)
-            box_collection.set_edgecolor('black')
-
-            # Add the collection to the plot
-            ax.add_collection3d(box_collection)
-
-            # Add text label in the center of the box
-            box_center = [x + w / 2, y + l / 2, z + h / 2]
-            ax.text(box_center[0], box_center[1], box_center[2], str(i + 1),
-                    color='white', ha='center', va='center', fontsize=8)
-
-        # Set labels and title
-        ax.set_xlabel('Width (X)')
-        ax.set_ylabel('Length (Y)')
-        ax.set_zlabel('Height (Z)')
-        ax.set_title('3D Bin Packing Result')
-
-        # Set axis limits
-        ax.set_xlim([0, container_width])
-        ax.set_ylim([0, container_length])
-        ax.set_zlim([0, container_height])
-
-        # Add a colorbar to show priority mapping
-        sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(1, 5))
-        sm.set_array([])
-        cbar = plt.colorbar(sm, ax=ax, shrink=0.6, aspect=10)
-        cbar.set_label('Unload Priority')
-
-        # Add volume utilization information
-        total_volume = 0
-        container_volume = float(torch.prod(env.container_dims).item())
-        for placed in env.placed_items:
-            box = placed['box']
-            total_volume += float(box.volume)
-
-        utilization = total_volume / container_volume * 100
-        plt.figtext(0.02, 0.02, f"Volume Utilization: {utilization:.1f}%", fontsize=10)
-        plt.figtext(0.02, 0.05, f"Success Rate: {env.successful_placements}/{env.total_items}", fontsize=10)
-
-        plt.tight_layout()
-        plt.savefig('enhanced_3d_packing_visualization.png')
-        plt.show()
-
-    except ImportError as e:
-        print(f"Visualization requires additional libraries: {e}")
-
-        # Example usage
-if __name__ == "__main__":
-            # Create environment
-    POSSIBLE_DIMS = [
-        (10, 10, 10), (8, 8, 8), (12, 8, 6),
-        (6, 6, 3), (5, 8, 3), (4, 6, 3), (2,4,3), (6,6,3), (1,2,2),(5,8,3),
-        (1,2,2), (4,8,3), (4,6,3), (4,9,3), (3,2,3), (3,3,3), (3,3,3), (3,2,3),
-        (3,2,3), (3,3,3), (3,3,3), (3,2,3), (5,7,2), (5,5,2), (5,7,2), (5,5,2), (2,4,1),
-        (8,15,4), (6,9,4), (2,8,2), (2,8,2), (2,4,2), (2,4,2), (2,4,2), (2,4,2), (8,12,4), (2,3,1),
-        (4,14,3), (3,7,2), (3,6,2), (4,5,2), (4,4,6), (4,4,6), (4,4,6), (4,4,6), (6,5,2), (3,7,2),
-        (4,5,2), (1,1,2), (4,4,2), (8,6,2), (8,15,3), (6,9,3), (4,4,4), (4,4,4), (4,4,4), (4,4,4), (4,4,4), (4,4,4),
-        (4,3,2), (4,3,2), (4,3,2), (5,7,5), (4,10,2), (4,8,3), (12,6,8), (12,6,8), (12,6,8), (12,6,8), (12,6,8),
-        (12,6,8), (12,6,8), (12,6,8), (2,9,3), (2,4,1), (5,6,1), (6,18,2)# Examples
-                # Add more relevant sizes
+    # Curriculum learning: Start with easier scenarios
+    curriculum_phases = [
+        {"episodes": num_episodes * 0.2, "categories": ["small"], "difficulties": ["very-easy", "easy"]},
+        {"episodes": num_episodes * 0.3, "categories": ["small", "medium"], "difficulties": ["easy", "medium-low"]},
+        {"episodes": num_episodes * 0.3, "categories": ["medium", "large"], "difficulties": ["medium", "medium-high"]},
+        {"episodes": num_episodes * 0.2, "categories": ["small", "medium", "large"],
+         "difficulties": ["hard", "very-hard"]}
     ]
 
-            # Train agent with enhanced techniques
-    actor, critic, stats = train_agent(
-                possible_container_dims=POSSIBLE_DIMS,
-                num_episodes=10000,
-                gamma=0.95,
-                lr_actor=1e-5,
-                lr_critic=1e-5,
-                print_interval=100,
-                save_interval=10,
-                batch_size=32,
-                replay_buffer_size=10000,
-                weight_decay=1e-4
+    phase_idx = 0
+    phase_episode_count = 0
+
+    # Training loop
+    for episode in range(num_episodes):
+        # Determine current curriculum phase
+        if phase_idx < len(curriculum_phases) - 1:
+            if phase_episode_count >= curriculum_phases[phase_idx]["episodes"]:
+                phase_idx += 1
+                phase_episode_count = 0
+                print(f"\n=== Moving to curriculum phase {phase_idx + 1} ===")
+        phase_episode_count += 1
+
+        current_phase = curriculum_phases[phase_idx]
+
+        # Select grid category and size
+        category = random.choice(current_phase["categories"])
+        grid_dims = random.choice(GRID_CATEGORIES[category]["grids"])
+        difficulty = random.choice(current_phase["difficulties"])
+
+        # Create environment with selected grid
+        env = DRLBinPackingEnv(container_dims=grid_dims)
+
+        # Generate SCU manifest
+        fill_ratio = random.uniform(0.6, 0.9)
+        priority_groups = random.randint(2, 4)
+        manifest = generate_scu_manifest(
+            grid_dims=grid_dims,
+            target_fill_ratio=fill_ratio,
+            difficulty=difficulty,
+            priority_groups=priority_groups
+        )
+
+        # Convert to item list format
+        cargo_manifest = manifest_to_item_list(manifest)
+
+        # Reset environment with SCU manifest
+        state = env.reset(cargo_manifest=cargo_manifest)
+        episode_reward = 0
+        episode_transitions = []
+        steps_in_episode = 0
+        max_steps = 500
+
+        # Episode loop
+        while steps_in_episode < max_steps:
+            steps_in_episode += 1
+
+            # Get feasibility mask
+            feasibility_mask = env.get_feasibility_mask()
+
+            # Check if current item exists
+            if env.current_item is None:
+                break
+
+            # Check if there are any feasible actions
+            if np.sum(feasibility_mask) == 0:
+                # No feasible placements - skip this item
+                env._move_to_next_item()
+
+                if env.current_item is None:
+                    break
+
+                state = env._build_graph_state()
+                continue
+
+            # Get action from actor
+            try:
+                with torch.no_grad():
+                    action_dist = actor(state, feasibility_mask)
+                    action = action_dist.sample()
+                    log_prob = action_dist.log_prob(action)
+            except Exception as e:
+                print(f"Error in actor forward pass: {e}")
+                break
+
+            # Take step in environment
+            try:
+                next_state, reward, done, info = env.step(action.item())
+            except Exception as e:
+                print(f"Error in environment step: {e}")
+                break
+
+            episode_reward += reward
+
+            # Store transition
+            replay_buffer.push(
+                state, action.item(), reward,
+                next_state if not done else None,
+                done, log_prob, feasibility_mask
             )
 
-    # Evaluate trained agent
-    eval_env = DRLBinPackingEnv(container_dims=(10, 10, 10))  # Evaluate on a standard size
-    evaluate_agent(eval_env, actor, num_episodes=10, visualize=True)
+            episode_transitions.append((
+                state, action, reward,
+                next_state if not done else None,
+                log_prob, done, feasibility_mask
+            ))
 
-    eval_env_small = DRLBinPackingEnv(container_dims=(6, 6, 3))  # Evaluate on a small size
-    evaluate_agent(eval_env_small, actor, num_episodes=10, visualize=False)
+            # Update state
+            state = next_state
+
+            if done:
+                break
+
+        # Skip update if episode was too short
+        if len(episode_transitions) < 2:
+            continue
+
+        # Perform batch updates from replay buffer
+        if len(replay_buffer) >= batch_size:
+            # Sample batch of transitions
+            states, actions, rewards, next_states, dones, _, _ = replay_buffer.sample(batch_size)
+
+            # Process states in batches
+            actor_loss_total = 0
+            critic_loss_total = 0
+
+            for i in range(len(states)):
+                state = states[i]
+                action_from_buffer = actions[i]
+                reward = rewards[i].item()
+                next_state = next_states[i]
+                done = dones[i].item()
+
+                try:
+                    # Calculate current state's value and target value
+                    current_value_q = critic(state).squeeze()
+                    current_device = current_value_q.device
+
+                    with torch.no_grad():
+                        if next_state is not None:
+                            next_value_q = critic(next_state).squeeze()
+                            reward_t = torch.tensor(reward, dtype=torch.float, device=current_device)
+                            done_t = torch.tensor(float(done), dtype=torch.float, device=current_device)
+                            target_q_value = reward_t + gamma * next_value_q * (1.0 - done_t)
+                        else:
+                            target_q_value = torch.tensor(reward, dtype=torch.float, device=current_device)
+
+                    # Update Critic
+                    critic_loss = F.mse_loss(current_value_q, target_q_value)
+
+                    optimizer_critic.zero_grad()
+                    critic_loss.backward()
+                    torch.nn.utils.clip_grad_norm_(critic.parameters(), max_norm=0.5)
+                    optimizer_critic.step()
+
+                    # Calculate Advantage
+                    with torch.no_grad():
+                        advantage = target_q_value - current_value_q
+
+                    # Actor Update
+                    action_dist = actor(state, None)
+                    action_tensor = torch.tensor(action_from_buffer.item() if isinstance(action_from_buffer,
+                                                                                         torch.Tensor) else action_from_buffer,
+                                                 device=current_device)
+
+                    log_prob = action_dist.log_prob(action_tensor)
+                    actor_loss = -log_prob * advantage.detach()
+
+                    optimizer_actor.zero_grad()
+                    actor_loss.backward()
+                    torch.nn.utils.clip_grad_norm_(actor.parameters(), max_norm=0.5)
+                    optimizer_actor.step()
+
+                    actor_loss_total += actor_loss.item()
+                    critic_loss_total += critic_loss.item()
+
+                except Exception as e:
+                    print(f"ERROR during replay buffer update: {e}")
+                    continue
+
+            # Average losses over batch
+            if len(states) > 0:
+                actor_loss_avg = actor_loss_total / len(states)
+                critic_loss_avg = critic_loss_total / len(states)
+            else:
+                actor_loss_avg = 0
+                critic_loss_avg = 0
+
+        # Track metrics
+        episode_rewards.append(float(episode_reward))
+        avg_rewards.append(float(episode_reward))
+
+        # Calculate success rate
+        success_rate = env.successful_placements / env.total_items if env.total_items > 0 else 0
+        success_rates.append(success_rate)
+        category_performance[category].append(success_rate)
+
+        # Print progress
+        if (episode + 1) % print_interval == 0:
+            avg_reward = np.mean(list(avg_rewards))
+            avg_success = np.mean(list(success_rates))
+
+            print(f"\nEpisode {episode + 1}/{num_episodes} | Phase {phase_idx + 1}")
+            print(f"Grid: {grid_dims} ({category}) | Difficulty: {difficulty}")
+            print(f"Avg Reward: {avg_reward:.2f} | Avg Success Rate: {avg_success:.2f}")
+            print(f"Items: {env.successful_placements}/{env.total_items} | Steps: {steps_in_episode}")
+
+            # Print category-specific performance
+            print("Category Performance:")
+            for cat in category_performance:
+                if len(category_performance[cat]) > 0:
+                    cat_success = np.mean(list(category_performance[cat]))
+                    print(f"  {cat}: {cat_success:.2f}")
+
+        # Save checkpoint
+        if (episode + 1) % save_interval == 0:
+            torch.save({
+                'episode': episode,
+                'actor_state_dict': actor.state_dict(),
+                'critic_state_dict': critic.state_dict(),
+                'optimizer_actor_state_dict': optimizer_actor.state_dict(),
+                'optimizer_critic_state_dict': optimizer_critic.state_dict(),
+                'episode_rewards': episode_rewards,
+                'actor_losses': actor_losses,
+                'critic_losses': critic_losses,
+                'category_performance': dict(category_performance)
+            }, checkpoint_path)
+            print(f"Checkpoint saved at episode {episode + 1}")
+
+    return actor, critic, {
+        'episode_rewards': episode_rewards,
+        'actor_losses': actor_losses,
+        'critic_losses': critic_losses,
+        'category_performance': dict(category_performance)
+    }
+
+
+def evaluate_agent_with_scu(actor, num_episodes=10, category="medium", visualize=False):
+    """
+    Evaluate the trained GNN agent with SCU manifests
+
+    Args:
+        actor: Trained actor network
+        num_episodes: Number of episodes to evaluate
+        category: Grid category to evaluate on
+        visualize: Whether to visualize the final packing
+
+    Returns:
+        Average reward, success rate, and volume utilization
+    """
+    episode_rewards = []
+    success_rates = []
+    volume_utilizations = []
+
+    for episode in range(num_episodes):
+        # Select random grid from category
+        grid_dims = random.choice(GRID_CATEGORIES[category]["grids"])
+        env = DRLBinPackingEnv(container_dims=grid_dims)
+
+        # Generate SCU manifest
+        manifest = generate_scu_manifest(
+            grid_dims=grid_dims,
+            target_fill_ratio=0.8,
+            difficulty="hard",
+            priority_groups=3
+        )
+        cargo_manifest = manifest_to_item_list(manifest)
+
+        # Print manifest summary for first episode
+        if episode == 0:
+            print_manifest_summary(manifest, grid_dims)
+
+        state = env.reset(cargo_manifest=cargo_manifest)
+        episode_reward = 0
+        total_item_volume = 0
+        container_volume = torch.prod(env.container_dims).item()
+
+        # Episode loop
+        steps = 0
+        max_steps = 500
+
+        while steps < max_steps:
+            steps += 1
+
+            # Check if current item exists
+            if env.current_item is None:
+                break
+
+            # Get feasibility mask
+            feasibility_mask = env.get_feasibility_mask()
+
+            # Check if there are any feasible actions
+            if np.sum(feasibility_mask) == 0:
+                # No feasible placements, move to next item
+                env._move_to_next_item()
+
+                if env.current_item is None:
+                    break
+
+                state = env._build_graph_state()
+                continue
+
+            # Get action from actor (greedy)
+            with torch.no_grad():
+                try:
+                    action_dist = actor(state, feasibility_mask)
+                    action = torch.argmax(action_dist.probs)
+                except Exception as e:
+                    print(f"Error in actor forward pass during evaluation: {e}")
+                    break
+
+            # Take step in environment
+            try:
+                next_state, reward, done, info = env.step(action.item())
+
+                # Convert reward to scalar if it's a tensor
+                if isinstance(reward, torch.Tensor):
+                    reward = reward.item()
+
+                episode_reward += reward
+
+                # Track volume if successful placement
+                if info.get("feasible", False) and env.current_item_idx > 0:
+                    prev_item_idx = env.current_item_idx - 1
+                    if prev_item_idx < len(cargo_manifest):
+                        prev_item = cargo_manifest[prev_item_idx]
+                        total_item_volume += prev_item[0] * prev_item[1] * prev_item[2]
+
+                # Update state
+                state = next_state
+
+                if done:
+                    break
+
+            except Exception as e:
+                print(f"Error during environment step in evaluation: {e}")
+                break
+
+        # Calculate metrics
+        success_rate = env.successful_placements / env.total_items if env.total_items > 0 else 0
+        volume_utilization = total_item_volume / container_volume
+
+        # Ensure we're appending scalar values
+        episode_rewards.append(float(episode_reward))
+        success_rates.append(float(success_rate))
+        volume_utilizations.append(float(volume_utilization))
+
+        # Visualize first episode if requested
+        if visualize and episode == 0:
+            try:
+                visualize_packing(env)
+            except Exception as e:
+                print(f"Visualization error: {e}")
+
+    # Calculate averages
+    avg_reward = np.mean(episode_rewards) if episode_rewards else 0
+    avg_success_rate = np.mean(success_rates) if success_rates else 0
+    avg_volume_utilization = np.mean(volume_utilizations) if volume_utilizations else 0
+
+    print(f"\nEvaluation Results ({num_episodes} episodes on {category} grids):")
+    print(f"Average Reward: {avg_reward:.2f}")
+    print(f"Average Success Rate: {avg_success_rate:.2f}")
+    print(f"Average Volume Utilization: {avg_volume_utilization:.2f}")
+
+    return avg_reward, avg_success_rate, avg_volume_utilization
+
+
+# Also create a function to load a saved model for inference
+def load_trained_model(checkpoint_path="scu_gnn_model_checkpoint.pt", device=None):
+    """
+    Load a trained model from checkpoint
+
+    Args:
+        checkpoint_path: Path to the saved checkpoint
+        device: Device to load model on (defaults to cuda if available)
+
+    Returns:
+        actor: Loaded actor network
+        checkpoint: Full checkpoint data
+    """
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # Load checkpoint
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+
+    # Initialize actor network
+    # We need to determine the feature dimension - use a small test environment
+    temp_env = DRLBinPackingEnv(container_dims=(4, 4, 4))
+    test_state = temp_env.reset()
+    node_feature_dim = test_state.x.size(1)
+    del temp_env
+
+    # Create and load actor
+    actor = ActorGNN(node_feature_dim=node_feature_dim).to(device)
+    actor.load_state_dict(checkpoint['actor_state_dict'])
+    actor.eval()  # Set to evaluation mode
+
+    print(f"Model loaded from {checkpoint_path}")
+    print(f"Trained for {checkpoint['episode']} episodes")
+
+    return actor, checkpoint
+
+
+# Function for single inference (for API use)
+def pack_single_manifest(actor, grid_dims, manifest, device=None):
+    """
+    Pack a single manifest using the trained model
+
+    Args:
+        actor: Trained actor network
+        grid_dims: Tuple of (width, length, height) for the grid
+        manifest: List of dictionaries with SCU manifest data
+        device: Device to run on
+
+    Returns:
+        Dictionary with packing results
+    """
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # Create environment
+    env = DRLBinPackingEnv(container_dims=grid_dims)
+
+    # Convert manifest to item list
+    cargo_manifest = manifest_to_item_list(manifest)
+
+    # Reset environment with manifest
+    state = env.reset(cargo_manifest=cargo_manifest)
+
+    # Run packing
+    steps = 0
+    max_steps = 500
+
+    while steps < max_steps and env.current_item is not None:
+        steps += 1
+
+        # Get feasibility mask
+        feasibility_mask = env.get_feasibility_mask()
+
+        # Check if there are any feasible actions
+        if np.sum(feasibility_mask) == 0:
+            env._move_to_next_item()
+            if env.current_item is None:
+                break
+            state = env._build_graph_state()
+            continue
+
+        # Get action from actor (greedy)
+        with torch.no_grad():
+            action_dist = actor(state, feasibility_mask)
+            action = torch.argmax(action_dist.probs)
+
+        # Take step
+        next_state, reward, done, info = env.step(action.item())
+        state = next_state
+
+        if done:
+            break
+
+    # Prepare results
+    placements = []
+    for i, placed in enumerate(env.placed_items):
+        box = placed['box']
+
+        # Find which SCU type this corresponds to
+        dims = [box.width.item(), box.length.item(), box.height.item()]
+        scu_type = None
+        for scu, scu_info in SCU_DEFINITIONS.items():
+            if dims == scu_info["dimensions"]:
+                scu_type = scu
+                break
+
+        placement = {
+            "item_id": f"{scu_type}_{i + 1:03d}",
+            "scu_type": scu_type or "Unknown",
+            "position": [box.x1.item(), box.y1.item(), box.z1.item()],
+            "dimensions": dims,
+            "priority": placed['priority']
+        }
+        placements.append(placement)
+
+    # Calculate metrics
+    success_rate = env.successful_placements / env.total_items if env.total_items > 0 else 0
+    total_volume = sum(p['box'].volume.item() for p in env.placed_items)
+    container_volume = torch.prod(env.container_dims).item()
+    utilization = total_volume / container_volume
+
+    # Identify unplaced items
+    unplaced_items = []
+    if env.successful_placements < env.total_items:
+        # Track which items were not placed
+        placed_count = env.successful_placements
+        for i in range(placed_count, env.total_items):
+            if i < len(cargo_manifest):
+                item = cargo_manifest[i]
+                # Find SCU type
+                for scu, scu_info in SCU_DEFINITIONS.items():
+                    if list(item[:3]) == scu_info["dimensions"]:
+                        unplaced_items.append({
+                            "scu_type": scu,
+                            "priority": item[4]
+                        })
+                        break
+
+    result = {
+        "success": True,
+        "grid_dimensions": list(grid_dims),
+        "placements": placements,
+        "unplaced_items": unplaced_items,
+        "metrics": {
+            "success_rate": float(success_rate),
+            "volume_utilization": float(utilization),
+            "items_placed": env.successful_placements,
+            "total_items": env.total_items
+        }
+    }
+
+    return result
+
+# Main execution
+if __name__ == "__main__":
+    # Train agent with SCU manifests
+    print("Starting training with SCU manifests...")
+    actor, critic, stats = train_agent_with_scu(
+        num_episodes=1000,
+        gamma=0.95,
+        lr_actor=5e-5,
+        lr_critic=1e-5,
+        print_interval=10,
+        save_interval=50,
+        batch_size=32,
+        replay_buffer_size=1000,
+        weight_decay=1e-4
+    )
+
+
+    # Evaluate on different grid categories
+    print("\n=== Evaluating on different grid categories ===")
+    for category in ["small", "medium", "large"]:
+        print(f"\nEvaluating on {category} grids:")
+        evaluate_agent_with_scu(actor, num_episodes=10, category=category, visualize=(category == "medium"))
+
+    print("\nTraining complete!")
