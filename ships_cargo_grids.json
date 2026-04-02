@@ -1,0 +1,480 @@
+{
+  "ships": [
+    {
+      "name": "Freelancer DUR/MIS",
+      "grids": [
+        {
+          "name": "Main",
+          "dimensions": [
+            2,
+            4,
+            3
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Mercury Star Runner",
+      "grids": [
+        {
+          "name": "Main",
+          "dimensions": [
+            6,
+            6,
+            3
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Zeus Mk II CL",
+      "grids": [
+        {
+          "name": "Left",
+          "dimensions": [
+            1,
+            2,
+            2
+          ]
+        },
+        {
+          "name": "Main",
+          "dimensions": [
+            5,
+            8,
+            3
+          ]
+        },
+        {
+          "name": "Right",
+          "dimensions": [
+            1,
+            2,
+            2
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Constellation Andromeda Aquila",
+      "grids": [
+        {
+          "name": "Main",
+          "dimensions": [
+            4,
+            8,
+            3
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Corsair",
+      "grids": [
+        {
+          "name": "Main",
+          "dimensions": [
+            4,
+            6,
+            3
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Freelancer MAX",
+      "grids": [
+        {
+          "name": "Main",
+          "dimensions": [
+            4,
+            9,
+            3
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Avenger Renegade",
+      "grids": [
+        {
+          "name": "Main",
+          "dimensions": [
+            2,
+            4,
+            1
+          ]
+        }
+      ]
+    },
+    {
+      "name": "C2 Hercules",
+      "grids": [
+        {
+          "name": "Aft",
+          "dimensions": [
+            8,
+            15,
+            4
+          ]
+        },
+        {
+          "name": "For",
+          "dimensions": [
+            6,
+            9,
+            4
+          ]
+        }
+      ]
+    },
+    {
+      "name": "C1 Spirit",
+      "grids": [
+        {
+          "name": "Left",
+          "dimensions": [
+            2,
+            8,
+            2
+          ]
+        },
+        {
+          "name": "Right",
+          "dimensions": [
+            2,
+            8,
+            2
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Hull-A",
+      "grids": [
+        {
+          "name": "1",
+          "dimensions": [
+            2,
+            4,
+            2
+          ]
+        },
+        {
+          "name": "2",
+          "dimensions": [
+            2,
+            4,
+            2
+          ]
+        },
+        {
+          "name": "3",
+          "dimensions": [
+            2,
+            4,
+            2
+          ]
+        },
+        {
+          "name": "4",
+          "dimensions": [
+            2,
+            4,
+            2
+          ]
+        }
+      ]
+    },
+    {
+      "name": "890 Jump",
+      "grids": [
+        {
+          "name": "Main",
+          "dimensions": [
+            8,
+            12,
+            4
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Constellation Taurus",
+      "grids": [
+        {
+          "name": "Aft",
+          "dimensions": [
+            2,
+            3,
+            1
+          ]
+        },
+        {
+          "name": "Main",
+          "dimensions": [
+            4,
+            14,
+            3
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Retaliator Cargo Module",
+      "grids": [
+        {
+          "name": "Aft",
+          "dimensions": [
+            3,
+            7,
+            2
+          ]
+        },
+        {
+          "name": "Main",
+          "dimensions": [
+            3,
+            6,
+            2
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Hammerhead",
+      "grids": [
+        {
+          "name": "Main",
+          "dimensions": [
+            4,
+            5,
+            2
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Caterpillar",
+      "grids": [
+        {
+          "name": "1",
+          "dimensions": [
+            4,
+            4,
+            6
+          ]
+        },
+        {
+          "name": "2",
+          "dimensions": [
+            4,
+            4,
+            6
+          ]
+        },
+        {
+          "name": "3",
+          "dimensions": [
+            4,
+            4,
+            6
+          ]
+        },
+        {
+          "name": "4",
+          "dimensions": [
+            4,
+            4,
+            6
+          ]
+        },
+        {
+          "name": "5",
+          "dimensions": [
+            6,
+            5,
+            2
+          ]
+        }
+      ]
+    },
+    {
+      "name": "400i",
+      "grids": [
+        {
+          "name": "Main",
+          "dimensions": [
+            3,
+            7,
+            2
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Cutlass Black",
+      "grids": [
+        {
+          "name": "Main",
+          "dimensions": [
+            4,
+            5,
+            2
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Redeemer",
+      "grids": [
+        {
+          "name": "Main",
+          "dimensions": [
+            1,
+            1,
+            2
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Zeus Mk II ES",
+      "grids": [
+        {
+          "name": "Main",
+          "dimensions": [
+            4,
+            4,
+            2
+          ]
+        }
+      ]
+    },
+    {
+      "name": "RAFT",
+      "grids": [
+        {
+          "name": "Main",
+          "dimensions": [
+            8,
+            6,
+            2
+          ]
+        }
+      ]
+    },
+    {
+      "name": "M2 Hercules",
+      "grids": [
+        {
+          "name": "Aft",
+          "dimensions": [
+            8,
+            15,
+            3
+          ]
+        },
+        {
+          "name": "For",
+          "dimensions": [
+            6,
+            9,
+            3
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Starfarer/Gemini",
+      "grids": [
+        {
+          "name": "Main",
+          "dimensions": [
+            5,
+            7,
+            5
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Constellation Andromeda Phoenix",
+      "grids": [
+        {
+          "name": "Main",
+          "dimensions": [
+            4,
+            10,
+            2
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Constellation Andromeda",
+      "grids": [
+        {
+          "name": "Main",
+          "dimensions": [
+            4,
+            8,
+            3
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Freelancer",
+      "grids": [
+        {
+          "name": "Main",
+          "dimensions": [
+            2,
+            9,
+            3
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Avenger Titan",
+      "grids": [
+        {
+          "name": "Main",
+          "dimensions": [
+            2,
+            4,
+            1
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Valkyrie",
+      "grids": [
+        {
+          "name": "Main",
+          "dimensions": [
+            5,
+            6,
+            1
+          ]
+        }
+      ]
+    },
+    {
+      "name": "A2 Hercules",
+      "grids": [
+        {
+          "name": "Main",
+          "dimensions": [
+            6,
+            18,
+            2
+          ]
+        }
+      ]
+    }
+  ]
+}

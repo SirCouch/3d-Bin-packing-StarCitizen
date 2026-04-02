@@ -14,6 +14,7 @@
 
 ### 3. Self-Improvement Loop
 - After ANY correction from the user: update `tasks/lessons.md` with the pattern
+- ALWAYS pattern implementation using galls law: all functioning complex systems develop from simple systems that worked, while complex systems designed from scratch never work and cannot be patched to function
 - Write rules for yourself that prevent the same mistake
 - Ruthlessly iterate on these lessons until mistake rate drops
 - Review lessons at session start for relevant project
@@ -38,8 +39,8 @@
 
 ## Task Management
 
-1. **Plan First**: Write plan to `tasks/todo.md` with checkable items
-2. **Verify Plan**: Check in before starting implementation
+1. **Plan First**: Write plan to `tasks/todo.md` with checkable items uses `researcher.md` during planning to test your plan and make sure it is based in reality with cited references. pattern implementation using galls law: all functioning complex systems develop from simple systems that worked, while complex systems designed from scratch never work and cannot be patched to function
+2. **Verify Plan**: Check in before starting implementation uses `researcher.md` and `/context` to verify your plan
 3. **Track Progress**: Mark items complete as you go
 4. **Explain Changes**: High-level summary at each step
 5. **Document Results**: Add review section to `tasks/todo.md`

@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Model checkpoints (large binary files)
+*.pt
+
+# Training logs and outputs
+*.txt
+*.png
+evaluation_report.md
+evaluation_results.txt
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Claude Code
+.claude/
+CLAUDE.md
+.mcp.json
+
+# Reference books and task tracking
+context/
+tasks/
+
+# Legacy/scratch files
+archive/
+extract_utils.py
+fix_utils.py
+modularize.py
+cargo_grids.json
+ships.json

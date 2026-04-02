@@ -34,7 +34,7 @@ GRID_CATEGORIES = {
 def get_grid_category(grid_dims: Tuple[int, int, int]) -> str:
     """Determine which category a grid belongs to based on its volume."""
     volume = grid_dims[0] * grid_dims[1] * grid_dims[2]
-    
+
     if volume <= 64:  # 4x4x4 = 64
         return "small"
     elif volume <= 512:  # 8x8x8 = 512
@@ -42,21 +42,38 @@ def get_grid_category(grid_dims: Tuple[int, int, int]) -> str:
     else:
         return "large"
 
+
+def container_fits_any_grid(container_dims: List[int], grids: List[Tuple[int, int, int]]) -> bool:
+    """Check if a container can physically fit in at least one grid with Z-axis rotation."""
+    sd = sorted(container_dims, reverse=True)
+    for grid in grids:
+        gd = sorted(grid, reverse=True)
+        # Z-axis rotation: height locked, only swap X/Y
+        rot0 = sd[0] <= gd[0] and sd[1] <= gd[1] and sd[2] <= gd[2]
+        rot1 = sd[1] <= gd[0] and sd[0] <= gd[1] and sd[2] <= gd[2]
+        if rot0 or rot1:
+            return True
+    return False
+
+
 def generate_scu_manifest(
     grid_dims: Optional[Tuple[int, int, int]] = None,
+    grids_list: Optional[List[Tuple[int, int, int]]] = None,
     target_fill_ratio: float = 0.8,
     difficulty: str = "medium",
     priority_groups: int = 3
 ) -> List[Dict]:
     """
     Generate a cargo manifest with SCU containers.
-    
+
     Args:
-        grid_dims: Grid dimensions to generate manifest for. If None, uses random grid.
+        grid_dims: Grid dimensions (used for volume/category). If None, uses random grid.
+        grids_list: Actual grid dimensions list for physical fit checking.
+                    When provided, only containers that physically fit at least one grid are used.
         target_fill_ratio: Target ratio of grid volume to fill (0.0 to 1.0)
         difficulty: Difficulty level affecting container variety and packing complexity
         priority_groups: Number of priority groups (1-5)
-        
+
     Returns:
         List of dictionaries with SCU container info
     """
@@ -66,10 +83,10 @@ def generate_scu_manifest(
         grid_dims = random.choice(GRID_CATEGORIES[category]["grids"])
     else:
         category = get_grid_category(grid_dims)
-    
+
     grid_volume = grid_dims[0] * grid_dims[1] * grid_dims[2]
     target_scu = int(grid_volume * target_fill_ratio)
-    
+
     # Adjust target based on difficulty
     difficulty_multipliers = {
         "very-easy": 0.3,
@@ -80,27 +97,34 @@ def generate_scu_manifest(
         "hard": 0.9,
         "very-hard": 1.0
     }
-    
+
     if difficulty in difficulty_multipliers:
         target_scu = int(target_scu * difficulty_multipliers[difficulty])
-    
+
     # Get preferred containers for this category
     preferred_containers = GRID_CATEGORIES[category]["preferred_containers"]
-    
+
     # Generate manifest
     manifest = []
     current_scu = 0
-    
+
     # Difficulty affects container variety
     if difficulty in ["very-easy", "easy"]:
-        # Use fewer container types
         available_containers = preferred_containers[:2]
     elif difficulty in ["medium-low", "medium", "medium-high"]:
-        # Use moderate variety
         available_containers = preferred_containers[:3]
     else:
-        # Use all container types
         available_containers = list(SCU_DEFINITIONS.keys())
+
+    # Filter to containers that physically fit at least one grid
+    if grids_list is not None:
+        available_containers = [
+            c for c in available_containers
+            if container_fits_any_grid(SCU_DEFINITIONS[c]["dimensions"], grids_list)
+        ]
+        # Fallback: always allow 1 SCU if nothing else fits
+        if not available_containers:
+            available_containers = ["1 SCU"]
     
     # Generate containers
     while current_scu < target_scu:
@@ -140,9 +164,10 @@ def generate_scu_manifest(
             
             current_scu += quantity * SCU_DEFINITIONS[container_type]["volume"]
     
-    # Sort by priority for better organization
-    manifest.sort(key=lambda x: x["priority"])
-    
+    # Sort largest-first within each priority group.
+    # Placing large items first (when MERs are biggest) is a fundamental bin-packing heuristic.
+    manifest.sort(key=lambda x: (x["priority"], -SCU_DEFINITIONS[x["scu_type"]]["volume"]))
+
     return manifest
 
 def manifest_to_item_list(manifest: List[Dict]) -> List[Tuple[float, float, float, float, int]]:
@@ -174,7 +199,10 @@ def manifest_to_item_list(manifest: List[Dict]) -> List[Tuple[float, float, floa
                 float(weight),   # weight
                 priority         # priority
             ))
-    
+
+    # Sort: by priority ascending, then by volume descending (largest items first within group)
+    item_list.sort(key=lambda x: (x[4], -(x[0] * x[1] * x[2])))
+
     return item_list
 
 def generate_training_batch(
