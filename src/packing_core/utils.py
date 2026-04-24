@@ -1,16 +1,21 @@
 import copy
 import json
+import os
 import torch
 import torch.nn.functional as F
 import numpy as np
 import random
 import torch.optim as optim
+import matplotlib
+matplotlib.use('Agg')  # non-interactive backend — plt.show() becomes a no-op
 import matplotlib.pyplot as plt
 from collections import deque
 from torch_geometric.data import Batch
 from .drl_env import DRLBinPackingEnv
 from .models import ActorGNN, CriticGNN, SharedGNNBackbone
 from scu_manifest_generator import manifest_to_item_list, SCU_DEFINITIONS
+
+STOP_FILE = "STOP_TRAINING"
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -108,7 +113,8 @@ def train_agent(num_episodes=1000, gamma=0.95, gae_lambda=0.95,
                 print_interval=100, save_interval=10, checkpoint_path="multi_gnn_model_checkpoint.pt",
                 batch_size=32, replay_buffer_size=10000, weight_decay=1e-4,
                 ppo_epochs=4, ppo_clip=0.2, entropy_coeff=0.01,
-                target_critic_tau=0.01, hidden_dim=128, possible_ships=None):
+                target_critic_tau=0.01, hidden_dim=128, possible_ships=None,
+                resume=False):
     """
     Train the GNN-based DRL agent with PPO, GAE, entropy bonus, and target critic.
 
@@ -172,7 +178,41 @@ def train_agent(num_episodes=1000, gamma=0.95, gae_lambda=0.95,
     ship_success_history = {i: deque(maxlen=20) for i in range(len(possible_ships))}
     difficulties = ["very-easy", "easy", "medium-low", "medium-high", "hard", "very-hard"]
 
-    for episode in range(num_episodes):
+    start_episode = 0
+    if resume and os.path.exists(checkpoint_path):
+        print(f"[resume] Loading checkpoint from {checkpoint_path}")
+        ckpt = torch.load(checkpoint_path, map_location=device)
+        actor.load_state_dict(ckpt['actor_state_dict'], strict=False)
+        critic.load_state_dict(ckpt['critic_state_dict'], strict=False)
+        if 'target_critic_state_dict' in ckpt:
+            target_critic.load_state_dict(ckpt['target_critic_state_dict'], strict=False)
+        if 'optimizer_actor_state_dict' in ckpt:
+            optimizer_actor.load_state_dict(ckpt['optimizer_actor_state_dict'])
+        if 'optimizer_critic_state_dict' in ckpt:
+            optimizer_critic.load_state_dict(ckpt['optimizer_critic_state_dict'])
+        if 'scheduler_actor_state_dict' in ckpt:
+            scheduler_actor.load_state_dict(ckpt['scheduler_actor_state_dict'])
+        if 'scheduler_critic_state_dict' in ckpt:
+            scheduler_critic.load_state_dict(ckpt['scheduler_critic_state_dict'])
+        if 'episode_rewards' in ckpt:
+            episode_rewards = list(ckpt['episode_rewards'])
+        if 'actor_losses' in ckpt:
+            actor_losses = list(ckpt['actor_losses'])
+        if 'critic_losses' in ckpt:
+            critic_losses = list(ckpt['critic_losses'])
+        if 'reward_running_mean' in ckpt:
+            reward_running_mean = ckpt['reward_running_mean']
+            reward_running_var = ckpt['reward_running_var']
+            reward_count = ckpt['reward_count']
+        start_episode = ckpt.get('episode', -1) + 1
+        print(f"[resume] Resuming at episode {start_episode}/{num_episodes}")
+        if start_episode >= num_episodes:
+            print(f"[resume] Already complete. Skipping.")
+            return actor, critic, {'episode_rewards': episode_rewards,
+                                   'actor_losses': actor_losses,
+                                   'critic_losses': critic_losses}
+
+    for episode in range(start_episode, num_episodes):
         # #7: Performance-weighted ship sampling — train more on ships we're bad at
         if possible_ships:
             ship_weights = []
@@ -389,7 +429,8 @@ def train_agent(num_episodes=1000, gamma=0.95, gae_lambda=0.95,
                   f"Critic Loss: {critic_loss_avg:.4f}")
 
         # Save checkpoint
-        if (episode + 1) % save_interval == 0:
+        should_stop = os.path.exists(STOP_FILE)
+        if (episode + 1) % save_interval == 0 or should_stop:
             torch.save({
                 'episode': episode,
                 'actor_state_dict': actor.state_dict(),
@@ -397,10 +438,21 @@ def train_agent(num_episodes=1000, gamma=0.95, gae_lambda=0.95,
                 'target_critic_state_dict': target_critic.state_dict(),
                 'optimizer_actor_state_dict': optimizer_actor.state_dict(),
                 'optimizer_critic_state_dict': optimizer_critic.state_dict(),
+                'scheduler_actor_state_dict': scheduler_actor.state_dict(),
+                'scheduler_critic_state_dict': scheduler_critic.state_dict(),
                 'episode_rewards': episode_rewards,
                 'actor_losses': actor_losses,
-                'critic_losses': critic_losses
+                'critic_losses': critic_losses,
+                'reward_running_mean': reward_running_mean,
+                'reward_running_var': reward_running_var,
+                'reward_count': reward_count,
             }, checkpoint_path)
+        if should_stop:
+            print(f"[pause] STOP_TRAINING file detected. Saved checkpoint at episode {episode}. Exiting.")
+            return actor, critic, {'episode_rewards': episode_rewards,
+                                   'actor_losses': actor_losses,
+                                   'critic_losses': critic_losses,
+                                   'stopped': True}
 
     # Plot training curves
     plot_training_curves(episode_rewards, actor_losses, critic_losses)
@@ -435,7 +487,7 @@ def plot_training_curves(rewards, actor_losses, critic_losses):
 
             plt.tight_layout()
             plt.savefig('enhanced_gnn_training_curves.png')
-            plt.show()
+            plt.close('all')
 
 def evaluate_agent(env, actor, num_episodes=10, visualize=False):
             """
@@ -645,7 +697,7 @@ def visualize_packing(env):
 
         plt.tight_layout()
         plt.savefig('enhanced_3d_packing_visualization.png')
-        plt.show()
+        plt.close('all')
 
     except ImportError as e:
         print(f"Visualization requires additional libraries: {e}")
@@ -687,9 +739,33 @@ def load_trained_model(checkpoint_path="enhanced_gnn_model_checkpoint.pt", devic
     return actor, checkpoint
 
 # Function for single inference (for API use)
-def pack_single_manifest(actor, grids_list, manifest, device=None):
+def _brute_force_find_placement(env, item_tuple):
+    """Diagnostic: integer-grid scan for any feasible placement of item_tuple.
+    Returns (grid_idx, x, y, z, rot) or None."""
+    w, l, h, weight, priority = item_tuple
+    rotations = [(w, l), (l, w)] if w != l else [(w, l)]
+    for grid_idx, grid in enumerate(env.grids):
+        gw, gl, gh = [int(d.item()) for d in grid['dims']]
+        grid_dims = grid['dims']
+        for rot, (iw, il) in enumerate(rotations):
+            iw_i, il_i, ih_i = int(iw), int(il), int(h)
+            if iw_i > gw or il_i > gl or ih_i > gh:
+                continue
+            for x in range(gw - iw_i + 1):
+                for y in range(gl - il_i + 1):
+                    for z in range(gh - ih_i + 1):
+                        pos = torch.tensor([float(x), float(y), float(z)])
+                        dims = torch.tensor([float(iw_i), float(il_i), float(ih_i)])
+                        if env._check_additional_constraints(pos, dims, weight, priority, grid_idx, grid_dims):
+                            return (grid_idx, x, y, z, rot, iw_i, il_i, ih_i)
+    return None
+
+
+def pack_single_manifest(actor, grids_list, manifest, device=None, diagnose=False):
     """
-    Pack a single manifest across multiple grids using the trained model
+    Pack a single manifest across multiple grids using the trained model.
+    If diagnose=True, when the env skips an item, brute-force scan for any
+    feasible integer-grid placement and record it in result['diagnostics'].
     """
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -703,6 +779,9 @@ def pack_single_manifest(actor, grids_list, manifest, device=None):
     # Reset environment with manifest
     state = env.reset(cargo_manifest=cargo_manifest)
 
+    diagnostics = {"missed_placements": [], "skipped_items": []}
+    skipped_indices = []  # actual manifest indices that failed to place
+
     # Run packing
     steps = 0
     max_steps = 500
@@ -712,9 +791,40 @@ def pack_single_manifest(actor, grids_list, manifest, device=None):
 
         # Get feasibility mask
         feasibility_mask = env.get_feasibility_mask()
+        pre_step_idx = env.current_item_idx
+        pre_step_placed = env.successful_placements
 
         # Check if there are any feasible actions
         if np.sum(feasibility_mask) == 0:
+            if diagnose:
+                idx = env.current_item_idx
+                item_tuple = cargo_manifest[idx]
+                skipped_info = {
+                    "item_idx": idx,
+                    "dims": list(item_tuple[:3]),
+                    "weight": item_tuple[3],
+                    "priority": item_tuple[4],
+                }
+                found = _brute_force_find_placement(env, item_tuple)
+                if found is not None:
+                    gidx, x, y, z, rot, iw, il, ih = found
+                    miss = {
+                        **skipped_info,
+                        "grid_idx": gidx,
+                        "grid_name": env.grids[gidx]['name'],
+                        "feasible_position": [x, y, z],
+                        "rotated_dims": [iw, il, ih],
+                        "rotation": rot,
+                    }
+                    diagnostics["missed_placements"].append(miss)
+                    print(f"[diagnose] MER MISS: item#{idx} dims={skipped_info['dims']} P{skipped_info['priority']} "
+                          f"— brute-force found ({x},{y},{z}) on grid '{env.grids[gidx]['name']}' rot={rot}",
+                          flush=True)
+                else:
+                    diagnostics["skipped_items"].append(skipped_info)
+                    print(f"[diagnose] NO-FIT (given current layout): item#{idx} dims={skipped_info['dims']} P{skipped_info['priority']}",
+                          flush=True)
+            skipped_indices.append(pre_step_idx)
             env._move_to_next_item()
             if env.current_item is None:
                 break
@@ -729,6 +839,10 @@ def pack_single_manifest(actor, grids_list, manifest, device=None):
         # Take step
         next_state, reward, done, info = env.step(action.item())
         state = next_state
+
+        # Detect skip-via-step-failure: item idx advanced but placements didn't
+        if env.successful_placements == pre_step_placed and env.current_item_idx > pre_step_idx:
+            skipped_indices.append(pre_step_idx)
 
         if done:
             break
@@ -764,23 +878,24 @@ def pack_single_manifest(actor, grids_list, manifest, device=None):
     container_volume = sum(torch.prod(g['dims']).item() for g in env.grids)
     utilization = total_volume / container_volume
 
-    # Identify unplaced items
+    # Identify unplaced items: the ACTUAL skipped indices, plus any manifest tail
+    # the loop never reached (shouldn't normally happen, but guard against it).
     unplaced_items = []
-    if env.successful_placements < env.total_items:
-        # Track which items were not placed
-        placed_count = env.successful_placements
-        for i in range(placed_count, env.total_items):
-            if i < len(cargo_manifest):
-                item = cargo_manifest[i]
-                # Find SCU type
-                item_dims_sorted = sorted(item[:3], reverse=True)
-                for scu, scu_info in SCU_DEFINITIONS.items():
-                    if item_dims_sorted == sorted(scu_info["dimensions"], reverse=True):
-                        unplaced_items.append({
-                            "scu_type": scu,
-                            "priority": item[4]
-                        })
-                        break
+    reached_idx = env.current_item_idx  # one past the last item processed
+    leftover = [i for i in range(reached_idx, len(cargo_manifest))]
+    for i in skipped_indices + leftover:
+        if i >= len(cargo_manifest):
+            continue
+        item = cargo_manifest[i]
+        item_dims_sorted = sorted(item[:3], reverse=True)
+        for scu, scu_info in SCU_DEFINITIONS.items():
+            if item_dims_sorted == sorted(scu_info["dimensions"], reverse=True):
+                unplaced_items.append({
+                    "scu_type": scu,
+                    "priority": item[4],
+                    "item_idx": i,
+                })
+                break
 
     result = {
         "success": True,
@@ -794,6 +909,9 @@ def pack_single_manifest(actor, grids_list, manifest, device=None):
             "total_items": env.total_items
         }
     }
+
+    if diagnose:
+        result["diagnostics"] = diagnostics
 
     return result
 

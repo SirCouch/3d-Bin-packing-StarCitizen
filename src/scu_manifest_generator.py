@@ -15,25 +15,25 @@ SCU_DEFINITIONS = {
 # Grid size categories for training
 GRID_CATEGORIES = {
     "small": {
-        "grids": [(4,4,4), (6,6,3), (4,6,3), (3,3,3), (4,4,2), (5,5,2)],
+        "grids": [[(4,4,4)], [(6,6,3)], [(4,6,3)], [(3,3,3)], [(4,4,2)], [(5,5,2)], [(4,4,2), (2,2,2)]],
         "max_scu": 50,
         "preferred_containers": ["1 SCU", "2 SCU", "4 SCU", "8 SCU"]
     },
     "medium": {
-        "grids": [(8,8,8), (12,6,8), (8,6,2), (5,7,5), (6,9,3), (4,10,2)],
+        "grids": [[(8,8,8)], [(12,6,8)], [(8,6,2)], [(5,7,5)], [(6,9,3)], [(4,10,2)], [(8,8,4), (4,4,4)], [(6,6,3), (6,6,3)]],
         "max_scu": 200,
         "preferred_containers": ["4 SCU", "8 SCU", "16 SCU", "24 SCU"]
     },
     "large": {
-        "grids": [(12,6,8), (8,15,4), (8,12,4), (6,18,2), (12,6,8)],
+        "grids": [[(12,6,8)], [(8,15,4)], [(8,12,4)], [(6,18,2)], [(12,6,8), (8,8,4), (4,4,4)]],
         "max_scu": 400,
         "preferred_containers": ["8 SCU", "16 SCU", "24 SCU", "32 SCU"]
     }
 }
 
-def get_grid_category(grid_dims: Tuple[int, int, int]) -> str:
-    """Determine which category a grid belongs to based on its volume."""
-    volume = grid_dims[0] * grid_dims[1] * grid_dims[2]
+def get_grid_category(grids_list: List[Tuple[int, int, int]]) -> str:
+    """Determine which category a ship belongs to based on its total volume."""
+    volume = sum(g[0] * g[1] * g[2] for g in grids_list)
 
     if volume <= 64:  # 4x4x4 = 64
         return "small"
@@ -78,13 +78,16 @@ def generate_scu_manifest(
         List of dictionaries with SCU container info
     """
     # Determine grid and category
-    if grid_dims is None:
-        category = random.choice(["small", "medium", "large"])
-        grid_dims = random.choice(GRID_CATEGORIES[category]["grids"])
-    else:
-        category = get_grid_category(grid_dims)
+    if grids_list is None:
+        if grid_dims is not None:
+            grids_list = [grid_dims]
+        else:
+            category = random.choice(["small", "medium", "large"])
+            grids_list = random.choice(GRID_CATEGORIES[category]["grids"])
+            
+    category = get_grid_category(grids_list)
 
-    grid_volume = grid_dims[0] * grid_dims[1] * grid_dims[2]
+    grid_volume = sum(g[0] * g[1] * g[2] for g in grids_list)
     target_scu = int(grid_volume * target_fill_ratio)
 
     # Adjust target based on difficulty
@@ -200,15 +203,27 @@ def manifest_to_item_list(manifest: List[Dict]) -> List[Tuple[float, float, floa
                 priority         # priority
             ))
 
-    # Sort: by priority ascending, then by volume descending (largest items first within group)
-    item_list.sort(key=lambda x: (x[4], -(x[0] * x[1] * x[2])))
+    # Hybrid sort: items that need to reserve a whole grid go first (largest-first
+    # within that tier); everything else respects priority order so the priority
+    # constraint (higher priority must be at lower Y) never gets blocked by lower-
+    # priority items consuming low-Y rows ahead of them.
+    if item_list:
+        # Threshold: 80% of the smallest grid we know about. We don't have grid info
+        # in this function, so use absolute SCU thresholds aligned with category
+        # breakpoints (smallest SCU grid in the project ≈ 24-32 SCU).
+        big_threshold = 25  # any item ≥ 25 SCU is "reserve a grid" sized
+        big = [x for x in item_list if (x[0] * x[1] * x[2]) >= big_threshold]
+        small = [x for x in item_list if (x[0] * x[1] * x[2]) < big_threshold]
+        big.sort(key=lambda x: (-(x[0] * x[1] * x[2]), x[4]))
+        small.sort(key=lambda x: (x[4], -(x[0] * x[1] * x[2])))
+        item_list = big + small
 
     return item_list
 
 def generate_training_batch(
     batch_size: int = 10,
     category: str = "medium"
-) -> List[Tuple[Tuple[int, int, int], List[Tuple]]]:
+) -> List[Tuple[List[Tuple[int, int, int]], List[Tuple]]]:
     """
     Generate a batch of training examples for a specific grid category.
     
@@ -217,13 +232,13 @@ def generate_training_batch(
         category: Grid size category ("small", "medium", "large")
         
     Returns:
-        List of (grid_dims, item_list) tuples
+        List of (grids_list, item_list) tuples
     """
     training_batch = []
     
     for _ in range(batch_size):
         # Select random grid from category
-        grid_dims = random.choice(GRID_CATEGORIES[category]["grids"])
+        grids_list = random.choice(GRID_CATEGORIES[category]["grids"])
         
         # Vary difficulty and fill ratio
         difficulty = random.choice(["easy", "medium-low", "medium", "medium-high", "hard"])
@@ -231,7 +246,7 @@ def generate_training_batch(
         
         # Generate manifest
         manifest = generate_scu_manifest(
-            grid_dims=grid_dims,
+            grids_list=grids_list,
             target_fill_ratio=fill_ratio,
             difficulty=difficulty,
             priority_groups=random.randint(2, 4)
@@ -240,11 +255,11 @@ def generate_training_batch(
         # Convert to item list
         item_list = manifest_to_item_list(manifest)
         
-        training_batch.append((grid_dims, item_list))
+        training_batch.append((grids_list, item_list))
     
     return training_batch
 
-def print_manifest_summary(manifest: List[Dict], grid_dims: Optional[Tuple[int, int, int]] = None):
+def print_manifest_summary(manifest: List[Dict], grids_list: Optional[List[Tuple[int, int, int]]] = None):
     """Print a human-readable summary of a manifest."""
     total_scu = sum(
         entry["quantity"] * SCU_DEFINITIONS[entry["scu_type"]]["volume"] 
@@ -252,9 +267,9 @@ def print_manifest_summary(manifest: List[Dict], grid_dims: Optional[Tuple[int, 
     )
     
     print(f"\n=== Cargo Manifest Summary ===")
-    if grid_dims:
-        grid_volume = grid_dims[0] * grid_dims[1] * grid_dims[2]
-        print(f"Grid Dimensions: {grid_dims[0]}x{grid_dims[1]}x{grid_dims[2]} ({grid_volume} SCU capacity)")
+    if grids_list:
+        grid_volume = sum(g[0] * g[1] * g[2] for g in grids_list)
+        print(f"Grid Configurations: {grids_list} ({grid_volume} SCU capacity)")
         print(f"Total Cargo: {total_scu} SCU ({total_scu/grid_volume*100:.1f}% utilization)")
     else:
         print(f"Total Cargo: {total_scu} SCU")
@@ -279,21 +294,21 @@ def print_manifest_summary(manifest: List[Dict], grid_dims: Optional[Tuple[int, 
 if __name__ == "__main__":
     # Test manifest generation for different grid sizes
     test_grids = [
-        (4, 4, 4),   # Small
-        (8, 8, 8),   # Medium
-        (12, 6, 8),  # Large
+        [(4, 4, 4)],   # Small
+        [(8, 8, 8)],   # Medium
+        [(12, 6, 8), (8, 8, 4)],  # Large Multi-grid
     ]
     
-    for grid_dims in test_grids:
+    for grids_list in test_grids:
         print(f"\n{'='*50}")
         manifest = generate_scu_manifest(
-            grid_dims=grid_dims,
+            grids_list=grids_list,
             target_fill_ratio=0.8,
             difficulty="medium",
             priority_groups=3
         )
         
-        print_manifest_summary(manifest, grid_dims)
+        print_manifest_summary(manifest, grids_list)
         
         # Convert to item list
         item_list = manifest_to_item_list(manifest)
@@ -305,4 +320,4 @@ if __name__ == "__main__":
     batch = generate_training_batch(batch_size=3, category="medium")
     print(f"Generated {len(batch)} training examples")
     for i, (dims, items) in enumerate(batch):
-        print(f"  Example {i+1}: Grid {dims}, {len(items)} items")
+        print(f"  Example {i+1}: Grids {dims}, {len(items)} items")

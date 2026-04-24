@@ -40,7 +40,7 @@ class EnsembleRouter:
             print(f"Warning: Large Model offline: {e}")
             self.actor_large = None
 
-    def route_manifest(self, ship_grids, manifest):
+    def route_manifest(self, ship_grids, manifest, diagnose=False):
         """
         Calculates the total volume of the ship and routes the payload to the specialized model.
         """
@@ -71,4 +71,4 @@ class EnsembleRouter:
             raise ValueError("All specialized models are offline. Cannot route request.")
 
         # Run inference using the selected specialist
-        return pack_single_manifest(selected_actor, ship_grids, manifest, device=self.device)
+        return pack_single_manifest(selected_actor, ship_grids, manifest, device=self.device, diagnose=diagnose)

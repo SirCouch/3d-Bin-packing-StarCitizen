@@ -20,13 +20,24 @@ def categorize_ships():
         ship_format = [[(g['dimensions'][0], g['dimensions'][1], g['dimensions'][2]), g['name']] for g in ship['grids']]
         
         total_vol = sum(g['dimensions'][0] * g['dimensions'][1] * g['dimensions'][2] for g in ship['grids'])
+        num_grids = len(ship['grids'])
         
-        if total_vol <= 64:
-            small_ships.append(ship_format)
-        elif total_vol <= 256:
-            medium_ships.append(ship_format)
-        else:
-            large_ships.append(ship_format)
+        # Calculate volume variance if multiple grids
+        vols = [g['dimensions'][0] * g['dimensions'][1] * g['dimensions'][2] for g in ship['grids']]
+        max_vol_ratio = max(vols) / sum(vols) if sum(vols) > 0 else 1.0
+
+        # Stratify sampling: ships with multiple grids or high variance get duplicated
+        # This ensures the model encounters irregular ships frequently
+        is_irregular = num_grids > 1 and max_vol_ratio < 0.9
+        copies = 3 if is_irregular else (2 if num_grids > 1 else 1)
+        
+        for _ in range(copies):
+            if total_vol <= 64:
+                small_ships.append(ship_format)
+            elif total_vol <= 256:
+                medium_ships.append(ship_format)
+            else:
+                large_ships.append(ship_format)
 
     print(f"Categorized {len(small_ships)} Small ships, {len(medium_ships)} Medium ships, and {len(large_ships)} Large ships.")
     return small_ships, medium_ships, large_ships
@@ -49,41 +60,57 @@ def train_ensemble():
         target_critic_tau=0.01,
     )
 
-    if small_ships:
-        print("--- Training Specialized Model: SMALL SHIPS ---")
-        train_agent(
-            possible_ships=small_ships,
-            num_episodes=500,
-            print_interval=100,
-            save_interval=100,
-            checkpoint_path="small_gnn_model.pt",
-            hidden_dim=128,
-            **shared_params,
-        )
+    import os
+    stages = [
+        ("SMALL SHIPS", small_ships, "small_gnn_model.pt", 500, 100, 100, 128),
+        ("MEDIUM SHIPS", medium_ships, "medium_gnn_model.pt", 3000, 200, 500, 128),
+        ("LARGE/MASSIVE SHIPS", large_ships, "large_gnn_model.pt", 5000, 100, 500, 256),
+    ]
 
-    if medium_ships:
-        print("--- Training Specialized Model: MEDIUM SHIPS ---")
-        train_agent(
-            possible_ships=medium_ships,
-            num_episodes=2000,
-            print_interval=200,
-            save_interval=400,
-            checkpoint_path="medium_gnn_model.pt",
-            hidden_dim=128,
-            **shared_params,
-        )
+    for name, ships, ckpt, eps, print_iv, save_iv, hidden in stages:
+        if not ships:
+            continue
+        resume = os.path.exists(ckpt)
+        if resume:
+            import torch
+            try:
+                data = torch.load(ckpt, map_location='cpu')
+                if data.get('episode', -1) + 1 >= eps:
+                    print(f"--- Skipping {name}: checkpoint already at episode {data['episode']+1}/{eps} ---")
+                    continue
+                print(f"--- Resuming {name} from episode {data.get('episode', -1)+1}/{eps} ---")
+            except Exception as e:
+                print(f"[warn] Could not inspect {ckpt}: {e}. Starting fresh.")
+                resume = False
+        else:
+            print(f"--- Training {name} from scratch ---")
 
-    if large_ships:
-        print("--- Training Specialized Model: LARGE/MASSIVE SHIPS ---")
-        train_agent(
-            possible_ships=large_ships,
-            num_episodes=3000,
-            print_interval=100,
-            save_interval=300,
-            checkpoint_path="large_gnn_model.pt",
-            hidden_dim=256,
+        result = train_agent(
+            possible_ships=ships,
+            num_episodes=eps,
+            print_interval=print_iv,
+            save_interval=save_iv,
+            checkpoint_path=ckpt,
+            hidden_dim=hidden,
+            resume=resume,
             **shared_params,
         )
+        if isinstance(result, tuple) and len(result) == 3 and result[2].get('stopped'):
+            print(f"[pause] Training halted during {name}. Delete STOP_TRAINING file and rerun to resume.")
+            return
+
+def run_post_training_eval():
+    """Kick off the full ensemble evaluation report after training completes."""
+    try:
+        from evaluate_model import generate_full_ensemble_evaluation_report
+        print("\n" + "=" * 70)
+        print("Training complete. Running ensemble evaluation...")
+        print("=" * 70)
+        generate_full_ensemble_evaluation_report()
+    except Exception as e:
+        print(f"[eval] Post-training evaluation failed: {e}")
+
 
 if __name__ == "__main__":
     train_ensemble()
+    run_post_training_eval()
