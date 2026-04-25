@@ -134,6 +134,16 @@ class DRLBinPackingEnv:
         feasible = self._check_additional_constraints(placement_position, item_dims, self.current_item['weight'], self.current_item['priority'], grid_idx, grid_dims)
 
         if not feasible:
+            grid_items = [p for p in self.placed_items if p['grid_idx'] == grid_idx]
+            anchor = self._find_valid_anchor_in_mer(
+                selected_mer, item_dims, self.current_item['weight'],
+                self.current_item['priority'], grid_idx, grid_dims, grid_items,
+            )
+            if anchor is not None:
+                placement_position = anchor
+                feasible = True
+
+        if not feasible:
             self._move_to_next_item()
             return self._build_graph_state(), -5.0, self.current_item is None, {"feasible": False}
 
@@ -533,14 +543,16 @@ class DRLBinPackingEnv:
             for rot_idx, rot_dims in enumerate(orientations):
                 if not mer_box.can_fit(rot_dims):
                     continue
-                # Lazy-compute grid items
                 if gidx not in grid_items_cache:
                     grid_items_cache[gidx] = [p for p in self.placed_items if p['grid_idx'] == gidx]
-                # Fast: only check the MER corner. Anchor search inside the MER is reserved
-                # for step() as a fallback when the corner fails a constraint, so the mask
-                # stays O(num_MERs * num_placed) instead of O(num_MERs * volume * num_placed).
                 if self._check_constraints_fast(mer_pos, rot_dims, item_weight, item_priority,
                                                 gidx, grid_dims, grid_items_cache[gidx]):
+                    mask[action_idx * 2 + rot_idx] = 1.0
+                elif self._find_valid_anchor_in_mer(
+                        mer_box, rot_dims, item_weight, item_priority,
+                        gidx, grid_dims, grid_items_cache[gidx]) is not None:
+                    # Corner failed a constraint (overlap, support, priority) but the item
+                    # still fits at an interior anchor — keep the MER in the action set.
                     mask[action_idx * 2 + rot_idx] = 1.0
 
         return mask

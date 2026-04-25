@@ -66,7 +66,8 @@ class MERManager:
 
     def _filter_redundant(self, boxes):
         """Filter out redundant MERs (contained within others or too small)."""
-        min_vol = 0.01 * self.container.volume
+        # 1x1x1 is the smallest packable SCU; any MER below that volume is unusable.
+        min_vol = 1.0
 
         kept = []
         for i, box_i in enumerate(boxes):
