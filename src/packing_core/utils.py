@@ -624,9 +624,9 @@ def visualize_packing(env):
             box = placed['box']
             priority = placed['priority']
 
-            # Define the vertices of the box
-            x, y, z = [v.item() for v in box.position]
-            w, l, h = [v.item() for v in box.dimensions]
+            # Define the vertices of the box (Box3D fields are floats)
+            x, y, z = box.x1, box.y1, box.z1
+            w, l, h = box.width, box.length, box.height
 
             box_vertices = [
                 [x, y, z],
@@ -853,7 +853,7 @@ def pack_single_manifest(actor, grids_list, manifest, device=None, diagnose=Fals
         box = placed['box']
 
         # Find which SCU type this corresponds to (compare sorted dims since rotation changes order)
-        dims = [box.width.item(), box.length.item(), box.height.item()]
+        dims = [box.width, box.length, box.height]
         dims_sorted = sorted(dims, reverse=True)
         scu_type = None
         for scu, scu_info in SCU_DEFINITIONS.items():
@@ -864,7 +864,7 @@ def pack_single_manifest(actor, grids_list, manifest, device=None, diagnose=Fals
         placement = {
             "item_id": f"{scu_type}_{i + 1:03d}",
             "scu_type": scu_type or "Unknown",
-            "position": [box.x1.item(), box.y1.item(), box.z1.item()],
+            "position": [box.x1, box.y1, box.z1],
             "dimensions": dims,
             "priority": placed['priority'],
             "grid_idx": placed['grid_idx'],

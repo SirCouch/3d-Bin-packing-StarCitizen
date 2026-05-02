@@ -18,6 +18,7 @@ import json
 import os
 import random
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -30,12 +31,19 @@ from packing_core.utils import train_agent  # noqa: E402
 from train_ensemble import categorize_ships  # noqa: E402
 
 
-def set_all_seeds(seed: int) -> None:
+def set_all_seeds(seed: int, deterministic: bool = False) -> None:
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+    if deterministic:
+        # CUBLAS_WORKSPACE_CONFIG must be set before any CUDA op to make
+        # cuBLAS deterministic (see torch.use_deterministic_algorithms docs).
+        os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+        torch.use_deterministic_algorithms(True, warn_only=True)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
 
 
 def sample_manifest(seed: int) -> list:
@@ -54,6 +62,11 @@ def main() -> None:
     p.add_argument("--label", required=True, help="run label, e.g. 'v1_baseline'")
     p.add_argument("--episodes", type=int, default=200)
     p.add_argument("--seed", type=int, default=17)
+    p.add_argument("--stage", choices=["small", "medium", "large"], default="small")
+    p.add_argument("--deterministic", action="store_true",
+                   help="enable torch.use_deterministic_algorithms + CUBLAS_WORKSPACE_CONFIG")
+    p.add_argument("--profile", action="store_true",
+                   help="run training under cProfile; save top-30 to <label>_profile.txt")
     args = p.parse_args()
 
     out_dir = REPO_ROOT / "tasks"
@@ -66,19 +79,22 @@ def main() -> None:
     if ckpt.name in forbidden:
         raise SystemExit(f"refusing to write checkpoint to production path {ckpt}")
 
-    set_all_seeds(args.seed)
+    set_all_seeds(args.seed, deterministic=args.deterministic)
 
-    small_ships, _, _ = categorize_ships()
-    if not small_ships:
-        raise SystemExit("no small ships categorized — check ships_cargo_grids.json")
+    small_ships, medium_ships, large_ships = categorize_ships()
+    stage_ships = {"small": small_ships, "medium": medium_ships, "large": large_ships}[args.stage]
+    if not stage_ships:
+        raise SystemExit(f"no {args.stage} ships categorized — check ships_cargo_grids.json")
 
-    print(f"[smoke:{args.label}] seed={args.seed} episodes={args.episodes} "
-          f"small_ships={len(small_ships)}")
+    hidden_dim = 128 if args.stage in ("small", "medium") else 256
+    print(f"[smoke:{args.label}] stage={args.stage} seed={args.seed} "
+          f"episodes={args.episodes} ships={len(stage_ships)} "
+          f"deterministic={args.deterministic} hidden_dim={hidden_dim}")
     print(f"[smoke:{args.label}] checkpoint -> {ckpt}")
 
-    # Match train_ensemble small-stage hyperparameters exactly.
-    actor, critic, metrics = train_agent(
-        possible_ships=small_ships,
+    # Match train_ensemble per-stage hyperparameters.
+    train_kwargs = dict(
+        possible_ships=stage_ships,
         num_episodes=args.episodes,
         gamma=0.95,
         gae_lambda=0.95,
@@ -94,19 +110,46 @@ def main() -> None:
         print_interval=50,
         save_interval=args.episodes,  # save once at the end
         checkpoint_path=str(ckpt),
-        hidden_dim=128,
+        hidden_dim=hidden_dim,
         resume=False,
     )
 
+    t_start = time.perf_counter()
+    if args.profile:
+        import cProfile
+        import pstats
+        profiler = cProfile.Profile()
+        profiler.enable()
+        actor, critic, metrics = train_agent(**train_kwargs)
+        profiler.disable()
+        prof_path = out_dir / f"regression_smoke_{args.label}_profile.txt"
+        with open(prof_path, "w") as f:
+            stats = pstats.Stats(profiler, stream=f)
+            stats.sort_stats("cumulative")
+            stats.print_stats(30)
+            f.write("\n\n=== sort by tottime ===\n\n")
+            stats.sort_stats("tottime")
+            stats.print_stats(30)
+        print(f"[smoke:{args.label}] cProfile -> {prof_path}")
+    else:
+        actor, critic, metrics = train_agent(**train_kwargs)
+
+    t_elapsed = time.perf_counter() - t_start
     rewards = list(metrics.get("episode_rewards", []))
     actor_losses = list(metrics.get("actor_losses", []))
     critic_losses = list(metrics.get("critic_losses", []))
 
     summary = {
         "label": args.label,
+        "stage": args.stage,
         "seed": args.seed,
+        "deterministic": args.deterministic,
+        "device": "cuda" if torch.cuda.is_available() else "cpu",
+        "device_name": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
         "episodes_requested": args.episodes,
         "episodes_completed": len(rewards),
+        "wall_clock_sec": t_elapsed,
+        "sec_per_episode": t_elapsed / max(1, len(rewards)),
         "reward_mean_first50": float(np.mean(rewards[:50])) if rewards else None,
         "reward_mean_last50": float(np.mean(rewards[-50:])) if len(rewards) >= 50 else None,
         "reward_max": float(max(rewards)) if rewards else None,

@@ -162,7 +162,7 @@ class DRLBinPackingEnv:
             'x2': px + dw, 'y2': py + dl, 'z2': pz + dh,
         })
         self.successful_placements += 1
-        self._grid_placed_vol[grid_idx] += float(placed_item.volume.item())
+        self._grid_placed_vol[grid_idx] += placed_item.volume
         self._grid_placed_count[grid_idx] += 1
         self._cached_mers = None  # invalidate MER cache
 
@@ -213,16 +213,16 @@ class DRLBinPackingEnv:
         """Require item to be fully supported (floor or items below) to prevent hover."""
         if item_box.z1 < 0.001:
             return True
-        bottom_area = float((item_box.x2 - item_box.x1).item() * (item_box.y2 - item_box.y1).item())
+        bottom_area = (item_box.x2 - item_box.x1) * (item_box.y2 - item_box.y1)
         if bottom_area <= 0:
             return True
         supported = 0.0
-        z1 = item_box.z1.item()
+        z1 = item_box.z1
         for placed in grid_items:
             pb = placed['box']
-            if abs(pb.z2.item() - z1) < 0.001:
-                ox = max(0.0, min(item_box.x2.item(), pb.x2.item()) - max(item_box.x1.item(), pb.x1.item()))
-                oy = max(0.0, min(item_box.y2.item(), pb.y2.item()) - max(item_box.y1.item(), pb.y1.item()))
+            if abs(pb.z2 - z1) < 0.001:
+                ox = max(0.0, min(item_box.x2, pb.x2) - max(item_box.x1, pb.x1))
+                oy = max(0.0, min(item_box.y2, pb.y2) - max(item_box.y1, pb.y1))
                 supported += ox * oy
         return (supported / bottom_area) >= min_ratio
 
@@ -407,8 +407,8 @@ class DRLBinPackingEnv:
         # Pre-extract MER coords to plain floats once (avoids O(N) .item() calls per feature)
         for i, mer_info in enumerate(all_mers):
             mer = mer_info['box']
-            mx1 = float(mer.x1.item()); my1 = float(mer.y1.item()); mz1 = float(mer.z1.item())
-            mw = float(mer.width.item()); ml = float(mer.length.item()); mh = float(mer.height.item())
+            mx1 = mer.x1; my1 = mer.y1; mz1 = mer.z1
+            mw = mer.width; ml = mer.length; mh = mer.height
             mvol = mw * ml * mh
             grid_vol = self.grid_volumes[mer_info['grid_idx']]
             mer_fill_ratio = mvol / grid_vol if grid_vol > 0 else 0.0
@@ -609,8 +609,8 @@ class DRLBinPackingEnv:
     def _find_valid_anchor_in_mer(self, mer_box, item_dims, weight, priority, grid_idx, grid_dims, grid_items):
         """Return the first integer position within mer_box where item satisfies all constraints."""
         # Pull MER coords once (these come from MER box which may be GPU tensor)
-        mx1 = int(mer_box.x1.item()); my1 = int(mer_box.y1.item()); mz1 = int(mer_box.z1.item())
-        mx2 = int(mer_box.x2.item()); my2 = int(mer_box.y2.item()); mz2 = int(mer_box.z2.item())
+        mx1 = int(mer_box.x1); my1 = int(mer_box.y1); mz1 = int(mer_box.z1)
+        mx2 = int(mer_box.x2); my2 = int(mer_box.y2); mz2 = int(mer_box.z2)
         iw = int(item_dims[0].item()); il = int(item_dims[1].item()); ih = int(item_dims[2].item())
 
         # Fast path: corner (pass plain floats)
