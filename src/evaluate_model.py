@@ -52,7 +52,6 @@ def evaluate_model_on_ships(checkpoint_path, ships_dict, num_episodes_per_ship=1
                 grids_list=actual_grids,
                 target_fill_ratio=0.8,
                 difficulty="hard",
-                priority_groups=3
             )
             
             result = pack_single_manifest(actor, grids_list, manifest)

@@ -37,3 +37,9 @@ modularize.py
 cargo_grids.json
 ships.json
 workflow-orchestration.md
+
+# Local-only — not part of the SirCouch/3d-Bin-packing-StarCitizen repo
+src/desktop_app.py
+frontend/
+tools/sc_bundle.js
+STOP_TRAINING

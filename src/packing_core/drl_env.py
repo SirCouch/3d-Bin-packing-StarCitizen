@@ -52,7 +52,7 @@ class DRLBinPackingEnv:
             diff = difficulty if difficulty is not None else "medium"
             manifest = generate_scu_manifest(
                 grid_dims=dummy_dims, grids_list=actual_grids,
-                target_fill_ratio=0.7, difficulty=diff, priority_groups=3)
+                target_fill_ratio=0.7, difficulty=diff)
             self.cargo_manifest = manifest_to_item_list(manifest)
         else:
             self.cargo_manifest = cargo_manifest

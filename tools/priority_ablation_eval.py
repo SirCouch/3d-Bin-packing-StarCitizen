@@ -15,7 +15,6 @@ import torch
 from packing_core.utils import load_trained_model, pack_single_manifest
 from scu_manifest_generator import (
     SCU_DEFINITIONS,
-    generate_scu_manifest,
     manifest_to_item_list,
 )
 

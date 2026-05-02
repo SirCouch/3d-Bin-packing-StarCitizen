@@ -94,3 +94,92 @@
 - Small SR avg is higher than before (88.1% vs ~87% inferred), but with more variance
 - Medium utilization up notably (62.7% vs low 50s prior) — clustering+support paying off on medium's typical layouts
 - Large SR avg up to 88.3% — strongest category now
+
+---
+
+# V2 Manifest Cycle (2026-04-30)
+
+**Run config**: small 500 / medium 3000 / large 5000 (in progress), GPU (RTX 4080, torch 2.9.1+cu126), v2 manifest distribution.
+
+**Distribution change vs prior runs**: this cycle uses the drop-off-as-primary-unit manifest generator. Per-manifest item count rose from v1 to v2:
+- small ~9 → ~10 items (+17%)
+- medium ~12 → ~35 items (+193%)
+- large ~26 → ~91 items (+257%)
+
+**Caveat for direct comparison**: a 95% success rate on v2 is meaningfully harder than 95% on v1 — same ship now sees ~3x more containers per episode under tighter geometric constraints (1/2 SCU filler crowding). Treat the V2 column as a *more demanding* benchmark, not a like-for-like.
+
+## Global Summary
+
+| Metric | Prior current (v1 cycle) | V2 cycle | Δ |
+|---|---:|---:|---:|
+| Small SR | 88.1% | **95.4%** | **+7.3** |
+| Small Util | 65.0% | **65.2%** | +0.2 |
+| Medium SR | 82.5% | **90.0%** | **+7.5** |
+| Medium Util | 62.7% | 59.8% | -2.9 |
+| Large SR | 88.3% | _pending_ | — |
+| Large Util | 64.8% | _pending_ | — |
+
+## Small Ships — V2 vs Prior (15)
+
+| Ship | Prior SR | V2 SR | Δ SR | Prior Util | V2 Util | Δ Util |
+|---|---:|---:|---:|---:|---:|---:|
+| Freelancer DUR/MIS | 96.7% | 85.7% | -11.0 | 70.4% | 58.3% | -12.1 |
+| Avenger Renegade | 78.3% | 96.7% | **+18.4** | 56.3% | 65.0% | **+8.7** |
+| C1 Spirit | 80.0% | 100.0% | **+20.0** | 66.6% | 71.4% | +4.8 |
+| Hull-A | 100.0% | 100.0% | 0.0 | 70.3% | 71.4% | +1.1 |
+| Hammerhead | 81.7% | 89.6% | +7.9 | 66.3% | 61.3% | -5.0 |
+| 400i | 82.2% | 93.7% | **+11.5** | 62.6% | 62.6% | 0.0 |
+| Cutlass Black | 91.9% | 95.0% | +3.1 | 67.5% | 64.8% | -2.7 |
+| Zeus Mk II ES | 97.8% | 96.6% | -1.2 | 68.1% | 65.6% | -2.5 |
+| Freelancer | 77.7% | 92.8% | **+15.1** | 64.4% | 65.2% | +0.8 |
+| Avenger Titan | 76.7% | 95.0% | **+18.3** | 56.3% | 62.5% | +6.2 |
+| Valkyrie | 77.0% | 96.9% | **+19.9** | 61.3% | 65.7% | +4.4 |
+| Apollo | 100.0% | 99.0% | -1.0 | 68.8% | 70.0% | +1.2 |
+| Clipper | 96.0% | 92.8% | -3.2 | 65.0% | 60.0% | -5.0 |
+| Prowler Utility | 100.0% | 100.0% | 0.0 | 68.8% | 69.7% | +0.9 |
+| Shiv | 85.7% | 96.7% | **+11.0** | 62.5% | 65.0% | +2.5 |
+| **Category avg** | **88.1%** | **95.4%** | **+7.3** | **65.0%** | **65.2%** | +0.2 |
+
+## Medium Ships — V2 vs Prior (16)
+
+| Ship | Prior SR | V2 SR | Δ SR | Prior Util | V2 Util | Δ Util |
+|---|---:|---:|---:|---:|---:|---:|
+| Mercury Star Runner | 85.6% | 78.4% | -7.2 | 63.8% | 49.3% | -14.5 |
+| Zeus Mk II CL | 79.5% | 88.8% | **+9.3** | 53.0% | 59.7% | +6.7 |
+| Constellation Andromeda Aquila | 75.8% | 95.3% | **+19.5** | 62.6% | 63.4% | +0.8 |
+| Corsair | 80.8% | 85.6% | +4.8 | 64.4% | 55.1% | -9.3 |
+| Freelancer MAX | 82.7% | 86.9% | +4.2 | 63.2% | 53.2% | -10.0 |
+| Constellation Taurus | 86.7% | 82.7% | -4.0 | 61.7% | 56.3% | -5.4 |
+| Retaliator Cargo Module | 84.5% | 94.0% | **+9.5** | 59.7% | 62.8% | +3.1 |
+| RAFT | 79.8% | 82.9% | +3.1 | 63.3% | 48.3% | **-15.0** |
+| Starfarer/Gemini | 88.9% | 95.2% | +6.3 | 62.8% | 62.9% | +0.1 |
+| Constellation Andromeda Phoenix | 81.2% | 94.3% | **+13.1** | 68.3% | 66.0% | -2.3 |
+| Constellation Andromeda | 78.2% | 92.0% | **+13.8** | 64.6% | 60.6% | -4.0 |
+| A2 Hercules | 73.6% | 89.4% | **+15.8** | 61.3% | 64.5% | +3.2 |
+| Perseus | 77.3% | 86.0% | **+8.7** | 61.3% | 54.7% | -6.6 |
+| Starlancer MAX | 87.2% | 99.4% | **+12.2** | 61.8% | 70.3% | **+8.5** |
+| Asgard | 81.5% | 90.9% | **+9.4** | 62.4% | 61.1% | -1.3 |
+| Starlancer TAC | 96.6% | 98.0% | +1.4 | 68.3% | 68.0% | -0.3 |
+| **Category avg** | **82.5%** | **90.0%** | **+7.5** | **62.7%** | **59.8%** | -2.9 |
+
+## Large Ships
+
+_Training in progress — eval pending checkpoint completion._
+
+## V2 Cycle Observations
+
+**Big wins** (despite the harder distribution):
+- **Constellation Andromeda Aquila** medium +19.5 SR
+- **Avenger Renegade / Valkyrie / Avenger Titan** small +18-20 SR — the previous run's small-ship regressions reversed
+- **C1 Spirit** small +20.0 SR (back to 100%)
+- **A2 Hercules** medium +15.8 SR
+- **Constellation Andromeda + Phoenix** medium +13-14 SR
+- **Starlancer MAX** medium +12.2 SR (now 99.4%)
+- **Freelancer** small +15.1 SR
+
+**Regressions on v2**:
+- **Freelancer DUR/MIS** small -11.0 SR — the smallest single-grid ship (vol=24) is consistently hardest under the high-filler v2 distribution
+- **Mercury Star Runner** medium -7.2 SR, util -14.5 — small single-grid medium with vol=108, lots of filler items competing
+- **RAFT** medium util -15.0 — single-grid 96 SCU with high filler density
+
+**Pattern**: tight single-grid medium-volume ships are the new floor. Multi-grid ships consistently improve. This tracks with the v2 manifest's filler-density change — it crowds packing decisions on small grids more than on multi-grid layouts.

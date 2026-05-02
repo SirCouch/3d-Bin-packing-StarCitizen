@@ -64,7 +64,7 @@ def train_ensemble():
     stages = [
         ("SMALL SHIPS", small_ships, "small_gnn_model.pt", 500, 100, 100, 128),
         ("MEDIUM SHIPS", medium_ships, "medium_gnn_model.pt", 3000, 200, 500, 128),
-        ("LARGE/MASSIVE SHIPS", large_ships, "large_gnn_model.pt", 5000, 100, 500, 256),
+        ("LARGE/MASSIVE SHIPS", large_ships, "large_gnn_model.pt", 2500, 100, 500, 256),
     ]
 
     for name, ships, ckpt, eps, print_iv, save_iv, hidden in stages:
