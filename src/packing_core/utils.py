@@ -259,7 +259,13 @@ def train_agent(num_episodes=1000, gamma=0.95, gae_lambda=0.95,
             feasibility_mask = env.get_feasibility_mask()
 
             if not feasibility_mask.any():
-                _, reward, done, _ = env.step(0)
+                # step(0) may still place via interior-anchor search even when
+                # the mask reports no feasible action (e.g. when interior
+                # search hits its probe cap and bails out of the mask, but a
+                # specific position still works at placement time). Keep the
+                # returned state so MER count stays in sync with the env.
+                next_state, reward, done, _ = env.step(0)
+                state = next_state
                 episode_reward += reward
                 if done:
                     break
