@@ -612,9 +612,19 @@ class DRLBinPackingEnv:
             return False
         return True
 
+    # Cap on interior anchor probes per call. Each probe is O(grid_items)
+    # constraint checks; with ~90 placed items and ~20 MERs × 2 rotations
+    # being probed per env step, an uncapped exhaustive search on a large
+    # empty MER (e.g. 12×6×8 = 576 positions) can stall an episode for
+    # 20+ minutes of pure-Python work. Capping caps the worst case at
+    # ~MAX_INTERIOR_PROBES × |grid_items| checks per call, with the cost
+    # that some legal-but-deep anchors are missed (the (MER, rot) gets
+    # marked infeasible). The corner is always checked first, so MERs
+    # whose corner fits keep working unchanged.
+    MAX_INTERIOR_PROBES = 256
+
     def _find_valid_anchor_in_mer(self, mer_box, item_dims, weight, priority, grid_idx, grid_dims, grid_items):
         """Return the first integer position within mer_box where item satisfies all constraints."""
-        # Pull MER coords once (these come from MER box which may be GPU tensor)
         mx1 = int(mer_box.x1); my1 = int(mer_box.y1); mz1 = int(mer_box.z1)
         mx2 = int(mer_box.x2); my2 = int(mer_box.y2); mz2 = int(mer_box.z2)
         iw = int(item_dims[0].item()); il = int(item_dims[1].item()); ih = int(item_dims[2].item())
@@ -624,11 +634,15 @@ class DRLBinPackingEnv:
         if self._check_constraints_fast(corner, item_dims, weight, priority, grid_idx, grid_dims, grid_items):
             return torch.tensor([corner[0], corner[1], corner[2]], dtype=torch.float)
 
+        probes = 0
         for x in range(mx1, mx2 - iw + 1):
             for y in range(my1, my2 - il + 1):
                 for z in range(mz1, mz2 - ih + 1):
                     if x == mx1 and y == my1 and z == mz1:
                         continue
+                    if probes >= self.MAX_INTERIOR_PROBES:
+                        return None
+                    probes += 1
                     pos = (float(x), float(y), float(z))
                     if self._check_constraints_fast(pos, item_dims, weight, priority, grid_idx, grid_dims, grid_items):
                         return torch.tensor([pos[0], pos[1], pos[2]], dtype=torch.float)
