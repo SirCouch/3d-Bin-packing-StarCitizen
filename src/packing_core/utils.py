@@ -258,7 +258,7 @@ def train_agent(num_episodes=1000, gamma=0.95, gae_lambda=0.95,
         while True:
             feasibility_mask = env.get_feasibility_mask()
 
-            if np.sum(feasibility_mask) == 0:
+            if not feasibility_mask.any():
                 _, reward, done, _ = env.step(0)
                 episode_reward += reward
                 if done:
@@ -518,7 +518,7 @@ def evaluate_agent(env, actor, num_episodes=10, visualize=False):
                     feasibility_mask = env.get_feasibility_mask()
 
                     # Check if there are any feasible actions
-                    if np.sum(feasibility_mask) == 0:
+                    if not feasibility_mask.any():
                         # No feasible placements, move to next item
                         _, reward, done, _ = env.step(0)  # Dummy action
                         episode_reward += reward
@@ -795,7 +795,7 @@ def pack_single_manifest(actor, grids_list, manifest, device=None, diagnose=Fals
         pre_step_placed = env.successful_placements
 
         # Check if there are any feasible actions
-        if np.sum(feasibility_mask) == 0:
+        if not feasibility_mask.any():
             if diagnose:
                 idx = env.current_item_idx
                 item_tuple = cargo_manifest[idx]

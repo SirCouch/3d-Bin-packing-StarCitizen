@@ -518,11 +518,17 @@ class DRLBinPackingEnv:
         return graph_data
 
     def get_feasibility_mask(self):
+        """Returns a bool torch.Tensor on CPU of shape `(n_mers * 2,)`.
+        True at index `2*mer_idx + rot_idx` if (MER, rotation) is feasible.
+        CPU placement keeps the rollout-time `.any()` check off the GPU
+        (avoids a CUDA→CPU sync per env step). The model uploads to GPU
+        once when the mask is consumed."""
         all_mers = self._get_all_mers()
+        n_actions = max(1, len(all_mers) * 2)
         if self.current_item is None or len(all_mers) == 0:
-            return np.zeros(max(1, len(all_mers) * 2), dtype=np.float32)
+            return torch.zeros(n_actions, dtype=torch.bool)
 
-        mask = np.zeros(len(all_mers) * 2, dtype=np.float32)
+        mask_cpu = [False] * (len(all_mers) * 2)
         item_dims = self.current_item['dimensions']
         item_weight = self.current_item['weight']
         item_priority = self.current_item['priority']
@@ -547,15 +553,15 @@ class DRLBinPackingEnv:
                     grid_items_cache[gidx] = [p for p in self.placed_items if p['grid_idx'] == gidx]
                 if self._check_constraints_fast(mer_pos, rot_dims, item_weight, item_priority,
                                                 gidx, grid_dims, grid_items_cache[gidx]):
-                    mask[action_idx * 2 + rot_idx] = 1.0
+                    mask_cpu[action_idx * 2 + rot_idx] = True
                 elif self._find_valid_anchor_in_mer(
                         mer_box, rot_dims, item_weight, item_priority,
                         gidx, grid_dims, grid_items_cache[gidx]) is not None:
                     # Corner failed a constraint (overlap, support, priority) but the item
                     # still fits at an interior anchor — keep the MER in the action set.
-                    mask[action_idx * 2 + rot_idx] = 1.0
+                    mask_cpu[action_idx * 2 + rot_idx] = True
 
-        return mask
+        return torch.tensor(mask_cpu, dtype=torch.bool)
 
     def _check_constraints_fast(self, position, dimensions, weight, priority, grid_idx, grid_dims, grid_items):
         """Pure-Python constraint check using cached coords on grid_items to avoid GPU sync.

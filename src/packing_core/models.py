@@ -100,7 +100,12 @@ class ActorGNN(nn.Module):
         mer_scores = mer_scores.view(-1)  # [num_mers * 2]
 
         if feasibility_mask is not None:
-            mask_tensor = torch.BoolTensor(feasibility_mask).to(device)
+            # Accept either a torch.Tensor (preferred — already on device) or
+            # a numpy array / list (legacy — coerce to bool tensor on device).
+            if isinstance(feasibility_mask, torch.Tensor):
+                mask_tensor = feasibility_mask.to(dtype=torch.bool, device=mer_scores.device)
+            else:
+                mask_tensor = torch.tensor(feasibility_mask, dtype=torch.bool, device=mer_scores.device)
             mer_scores = mer_scores.masked_fill(~mask_tensor, float('-inf'))
 
         return Categorical(logits=mer_scores)
