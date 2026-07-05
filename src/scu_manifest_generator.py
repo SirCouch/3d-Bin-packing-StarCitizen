@@ -1,5 +1,5 @@
 import random
-from typing import List, Tuple, Dict, Optional
+from typing import Any, List, Tuple, Dict, Optional
 
 import numpy as np
 
@@ -17,6 +17,7 @@ SCU_DEFINITIONS = {
 # v2 generator constants — drop-off-as-primary-unit refactor.
 # Filler containers are always available across every category.
 FILLER_CONTAINERS = ["1 SCU", "2 SCU"]
+BULK_ONLY_RUN_TYPE = "bulk-only"
 
 # In-game frequency weights for the bulk-phase weighted selection.
 # Values are starting points; recalibrate against logged contracts when available.
@@ -83,23 +84,111 @@ GRID_CATEGORIES = {
     }
 }
 
-def get_grid_category(grids_list: List[Tuple[int, int, int]]) -> str:
-    """Determine which category a ship belongs to based on its total volume."""
-    volume = sum(g[0] * g[1] * g[2] for g in grids_list)
+def get_grid_dimensions(grid: Any) -> Tuple[float, float, float]:
+    """Return bounding-box dimensions from a grid spec.
 
-    if volume <= 64:  # 4x4x4 = 64
+    Supported grid forms:
+    - ``(w, l, h)``
+    - ``[(w, l, h), name]``
+    - ``[(w, l, h), name, blocked]``
+    - ``{"dimensions": [...], "name": ..., "blocked": [...]}``
+    """
+    if isinstance(grid, dict):
+        dims = grid["dimensions"]
+    elif (
+        isinstance(grid, (list, tuple))
+        and len(grid) >= 2
+        and isinstance(grid[0], (list, tuple))
+    ):
+        dims = grid[0]
+    else:
+        dims = grid
+
+    if not isinstance(dims, (list, tuple)) or len(dims) != 3:
+        raise ValueError(f"Invalid grid dimensions: {dims!r}")
+    return float(dims[0]), float(dims[1]), float(dims[2])
+
+
+def get_grid_blockers(grid: Any) -> List[Any]:
+    """Return blocker specs from a grid spec, if present."""
+    if isinstance(grid, dict):
+        return list(grid.get("blocked", []) or [])
+    if (
+        isinstance(grid, (list, tuple))
+        and len(grid) >= 3
+        and isinstance(grid[0], (list, tuple))
+    ):
+        raw = grid[2]
+        if isinstance(raw, dict) and "blocked" in raw:
+            raw = raw["blocked"]
+        return list(raw or [])
+    return []
+
+
+def get_blocker_dimensions(blocker: Any) -> Tuple[float, float, float]:
+    if isinstance(blocker, dict):
+        dims = blocker["dimensions"]
+    elif isinstance(blocker, (list, tuple)) and len(blocker) >= 2:
+        dims = blocker[1]
+    else:
+        raise ValueError(f"Invalid blocker spec: {blocker!r}")
+
+    if not isinstance(dims, (list, tuple)) or len(dims) != 3:
+        raise ValueError(f"Invalid blocker dimensions: {dims!r}")
+    return float(dims[0]), float(dims[1]), float(dims[2])
+
+
+def get_grid_bounding_volume(grid: Any) -> float:
+    w, l, h = get_grid_dimensions(grid)
+    return w * l * h
+
+
+def get_grid_blocked_volume(grid: Any) -> float:
+    total = 0.0
+    for blocker in get_grid_blockers(grid):
+        w, l, h = get_blocker_dimensions(blocker)
+        total += w * l * h
+    return total
+
+
+def get_grid_usable_volume(grid: Any) -> float:
+    return max(0.0, get_grid_bounding_volume(grid) - get_grid_blocked_volume(grid))
+
+
+def get_total_usable_volume(grids_list: List[Any]) -> float:
+    return sum(get_grid_usable_volume(grid) for grid in grids_list)
+
+
+def get_grid_category(grids_list: List[Any]) -> str:
+    """Determine which specialist category a ship belongs to by total SCU."""
+    volume = get_total_usable_volume(grids_list)
+
+    if volume <= 64:
         return "small"
-    elif volume <= 512:  # 8x8x8 = 512
+    elif volume <= 512:
         return "medium"
     else:
         return "large"
 
 
-def container_fits_any_grid(container_dims: List[int], grids: List[Tuple[int, int, int]]) -> bool:
+def is_bulk_only_manifest_target(
+    grids_list: List[Tuple[int, int, int]],
+    ship_name: Optional[str] = None,
+) -> bool:
+    """Return True for named haulers that should not get filler-heavy runs."""
+    if ship_name is not None:
+        normalized = ship_name.lower().replace(" ", "").replace("_", "-")
+        if normalized in {"hull-c", "hullc"}:
+            return True
+
+    return False
+
+
+def container_fits_any_grid(container_dims: List[int], grids: List[Any]) -> bool:
     """Check if a container can physically fit in at least one grid with Z-axis rotation."""
     sd = sorted(container_dims, reverse=True)
     for grid in grids:
-        gd = sorted(grid, reverse=True)
+        gd = sorted(get_grid_dimensions(grid), reverse=True)
         # Z-axis rotation: height locked, only swap X/Y
         rot0 = sd[0] <= gd[0] and sd[1] <= gd[1] and sd[2] <= gd[2]
         rot1 = sd[1] <= gd[0] and sd[0] <= gd[1] and sd[2] <= gd[2]
@@ -217,6 +306,7 @@ def fill_location(
     priority: int,
     available_containers: List[str],
     difficulty: str,
+    bulk_only: bool = False,
 ) -> List[Dict]:
     """Two-phase fill for a single drop-off location.
 
@@ -231,6 +321,30 @@ def fill_location(
 
     entries: List[Dict] = []
     current_scu = 0
+
+    if bulk_only:
+        while current_scu < target_scu:
+            remaining = target_scu - current_scu
+            valid = [
+                c for c in available_containers
+                if SCU_DEFINITIONS[c]["volume"] <= remaining
+            ]
+            if not valid:
+                break
+            weights = [GAME_FREQUENCY.get(c, 1.0) for c in valid]
+            container_type = random.choices(valid, weights=weights)[0]
+            unit_volume = SCU_DEFINITIONS[container_type]["volume"]
+            max_quantity = remaining // unit_volume
+            if max_quantity <= 0:
+                break
+            quantity = random.randint(1, min(5, max_quantity))
+            entries.append({
+                "scu_type": container_type,
+                "quantity": quantity,
+                "priority": priority,
+            })
+            current_scu += quantity * unit_volume
+        return entries
 
     # Phase 1 — bulk fill. Cap quantity to leave at least 1 SCU for Phase 2,
     # so filler presence per location is guaranteed (spec validation req #1
@@ -303,7 +417,8 @@ def generate_scu_manifest(
         grids_list: Actual grid dimensions for physical-fit filtering.
         target_fill_ratio: Target ratio of grid volume to fill (pre-difficulty).
         difficulty: Curriculum difficulty ("very-easy" .. "very-hard").
-        run_type: "normal" | "mixed" | "bulk". When None, sampled per category.
+        run_type: "normal" | "mixed" | "bulk" | "bulk-only". When None,
+            sampled per category. "bulk-only" excludes 1/2 SCU filler.
         force_num_dropoffs: If set, overrides random drop-off count and skips
             the sub-2-SCU guard (A2). For testing/override only.
         medium_mixed_probability: Probability of medium ships running a mixed
@@ -321,7 +436,7 @@ def generate_scu_manifest(
             category = random.choice(["small", "medium", "large"])
             grids_list = random.choice(GRID_CATEGORIES[category]["grids"])
     category = get_grid_category(grids_list)
-    grid_volume = sum(g[0] * g[1] * g[2] for g in grids_list)
+    grid_volume = int(get_total_usable_volume(grids_list))
 
     # Total SCU with jitter; resolve drop-off count, run_type, per-loc split.
     total_scu = _compute_total_scu(grid_volume, target_fill_ratio, difficulty)
@@ -331,12 +446,17 @@ def generate_scu_manifest(
     if run_type is None:
         run_type = sampled_run_type
 
+    bulk_only = run_type == BULK_ONLY_RUN_TYPE
+
     # Build the available container pool:
     # - filler always
     # - bulk always (per category)
     # - rare iff run_type permits AND category permits
     cat_cfg = GRID_CATEGORIES[category]
-    available = list(FILLER_CONTAINERS) + list(cat_cfg["bulk_containers"])
+    if bulk_only:
+        available = list(cat_cfg["bulk_containers"]) + list(cat_cfg["rare_containers"])
+    else:
+        available = list(FILLER_CONTAINERS) + list(cat_cfg["bulk_containers"])
     if run_type in ("mixed", "bulk") and cat_cfg["rare_containers"]:
         available.extend(cat_cfg["rare_containers"])
 
@@ -356,6 +476,7 @@ def generate_scu_manifest(
             priority=idx + 1,
             available_containers=available,
             difficulty=difficulty,
+            bulk_only=bulk_only,
         ))
 
     # Sort by (priority, -volume) — preserves existing downstream contract.
@@ -448,7 +569,7 @@ def generate_training_batch(
     
     return training_batch
 
-def print_manifest_summary(manifest: List[Dict], grids_list: Optional[List[Tuple[int, int, int]]] = None):
+def print_manifest_summary(manifest: List[Dict], grids_list: Optional[List[Any]] = None):
     """Print a human-readable summary of a manifest."""
     total_scu = sum(
         entry["quantity"] * SCU_DEFINITIONS[entry["scu_type"]]["volume"] 
@@ -457,7 +578,7 @@ def print_manifest_summary(manifest: List[Dict], grids_list: Optional[List[Tuple
     
     print(f"\n=== Cargo Manifest Summary ===")
     if grids_list:
-        grid_volume = sum(g[0] * g[1] * g[2] for g in grids_list)
+        grid_volume = get_total_usable_volume(grids_list)
         print(f"Grid Configurations: {grids_list} ({grid_volume} SCU capacity)")
         print(f"Total Cargo: {total_scu} SCU ({total_scu/grid_volume*100:.1f}% utilization)")
     else:

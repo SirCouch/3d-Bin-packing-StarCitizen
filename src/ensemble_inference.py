@@ -2,6 +2,7 @@ import os
 import torch
 import numpy as np
 from packing_core.utils import load_trained_model, pack_single_manifest
+from scu_manifest_generator import get_total_usable_volume
 
 class EnsembleRouter:
     def __init__(self, small_ckpt="small_gnn_model.pt", medium_ckpt="medium_gnn_model.pt", large_ckpt="large_gnn_model.pt"):
@@ -45,10 +46,7 @@ class EnsembleRouter:
         Calculates the total volume of the ship and routes the payload to the specialized model.
         """
         # Calculate total SCU volume across all grids
-        total_vol = 0
-        for grid in ship_grids:
-            dims = grid[0]
-            total_vol += dims[0] * dims[1] * dims[2]
+        total_vol = get_total_usable_volume(ship_grids)
 
         print(f"Incoming Ship Volume: {total_vol} SCU. Routing to specialized model...")
 

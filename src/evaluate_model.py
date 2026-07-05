@@ -4,7 +4,19 @@ import numpy as np
 from datetime import datetime
 import torch
 from packing_core.utils import load_trained_model, pack_single_manifest
-from scu_manifest_generator import generate_scu_manifest
+from scu_manifest_generator import (
+    BULK_ONLY_RUN_TYPE,
+    generate_scu_manifest,
+    get_grid_dimensions,
+    get_total_usable_volume,
+    is_bulk_only_manifest_target,
+)
+
+
+def _grid_from_json(grid):
+    dims = tuple(grid["dimensions"])
+    blocked = grid.get("blocked", [])
+    return [dims, grid["name"], blocked] if blocked else [dims, grid["name"]]
 
 def categorize_ships_for_eval(data):
     small_ships = {}
@@ -12,8 +24,8 @@ def categorize_ships_for_eval(data):
     large_ships = {}
 
     for ship in data['ships']:
-        grids = [[tuple(g['dimensions']), g['name']] for g in ship['grids']]
-        total_vol = sum(np.prod(g[0]) for g in grids)
+        grids = [_grid_from_json(g) for g in ship['grids']]
+        total_vol = get_total_usable_volume(grids)
         
         if total_vol <= 64:
             small_ships[ship['name']] = grids
@@ -39,9 +51,17 @@ def evaluate_model_on_ships(checkpoint_path, ships_dict, num_episodes_per_ship=1
     for ship_name, grids_list in ships_dict.items():
         print(f"Evaluating on {ship_name} ({len(grids_list)} Grids)...")
         
-        total_vol = int(sum(np.prod(g[0]) for g in grids_list))
+        total_vol = int(get_total_usable_volume(grids_list))
         dummy_dims = (total_vol, 1, 1)
-        actual_grids = [g[0] for g in grids_list]
+        actual_grids = grids_list
+        run_type = (
+            BULK_ONLY_RUN_TYPE
+            if is_bulk_only_manifest_target(
+                [get_grid_dimensions(g) for g in actual_grids],
+                ship_name=ship_name,
+            )
+            else None
+        )
 
         ship_success_rates = []
         ship_utilizations = []
@@ -52,6 +72,7 @@ def evaluate_model_on_ships(checkpoint_path, ships_dict, num_episodes_per_ship=1
                 grids_list=actual_grids,
                 target_fill_ratio=0.8,
                 difficulty="hard",
+                run_type=run_type,
             )
             
             result = pack_single_manifest(actor, grids_list, manifest)

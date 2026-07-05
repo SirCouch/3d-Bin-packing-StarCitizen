@@ -2,6 +2,13 @@ import json
 import torch
 import numpy as np
 from packing_core.utils import train_agent, load_trained_model, pack_single_manifest
+from scu_manifest_generator import get_total_usable_volume
+
+
+def _grid_from_json(grid):
+    dims = (grid['dimensions'][0], grid['dimensions'][1], grid['dimensions'][2])
+    blocked = grid.get("blocked", [])
+    return [dims, grid['name'], blocked] if blocked else [dims, grid['name']]
 
 def categorize_ships():
     try:
@@ -17,13 +24,13 @@ def categorize_ships():
 
     for ship in data['ships']:
         # Format for environment: [[(dim_x, dim_y, dim_z), "Name"], ...]
-        ship_format = [[(g['dimensions'][0], g['dimensions'][1], g['dimensions'][2]), g['name']] for g in ship['grids']]
+        ship_format = [_grid_from_json(g) for g in ship['grids']]
         
-        total_vol = sum(g['dimensions'][0] * g['dimensions'][1] * g['dimensions'][2] for g in ship['grids'])
+        total_vol = get_total_usable_volume(ship_format)
         num_grids = len(ship['grids'])
         
         # Calculate volume variance if multiple grids
-        vols = [g['dimensions'][0] * g['dimensions'][1] * g['dimensions'][2] for g in ship['grids']]
+        vols = [get_total_usable_volume([g]) for g in ship_format]
         max_vol_ratio = max(vols) / sum(vols) if sum(vols) > 0 else 1.0
 
         # Stratify sampling: ships with multiple grids or high variance get duplicated

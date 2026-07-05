@@ -10,6 +10,22 @@
             4,
             3
           ]
+        },
+        {
+          "name": "Left",
+          "dimensions": [
+            1,
+            2,
+            3
+          ]
+        },
+        {
+          "name": "Right",
+          "dimensions": [
+            1,
+            2,
+            3
+          ]
         }
       ]
     },
@@ -23,6 +39,14 @@
             6,
             3
           ]
+        },
+        {
+          "name": "Shielded",
+            "dimensions": [
+              1,
+              3,
+              2
+            ]
         }
       ]
     },
@@ -30,27 +54,15 @@
       "name": "Zeus Mk II CL",
       "grids": [
         {
-          "name": "Left",
-          "dimensions": [
-            1,
-            2,
-            2
-          ]
-        },
-        {
+          "dimensions": [7, 8, 3],
           "name": "Main",
-          "dimensions": [
-            5,
-            8,
-            3
-          ]
-        },
-        {
-          "name": "Right",
-          "dimensions": [
-            1,
-            2,
-            2
+          "blocked": [
+            { "position": [0, 0, 0], "dimensions": [1, 4, 3], "supports": false },
+            { "position": [0, 6, 0], "dimensions": [1, 2, 3], "supports": false },
+            { "position": [0, 4, 2], "dimensions": [1, 2, 1], "supports": false },
+            { "position": [6, 0, 0], "dimensions": [1, 4, 3], "supports": false },
+            { "position": [6, 6, 0], "dimensions": [1, 2, 3], "supports": false },
+            { "position": [6, 4, 2], "dimensions": [1, 2, 1], "supports": false }
           ]
         }
       ]
@@ -89,6 +101,22 @@
           "dimensions": [
             4,
             9,
+            3
+          ]
+        },
+        {
+          "name": "Left",
+          "dimensions": [
+            1,
+            2,
+            3
+          ]
+        },
+        {
+          "name": "Right",
+          "dimensions": [
+            1,
+            2,
             3
           ]
         }
@@ -167,22 +195,6 @@
             4,
             2
           ]
-        },
-        {
-          "name": "3",
-          "dimensions": [
-            2,
-            4,
-            2
-          ]
-        },
-        {
-          "name": "4",
-          "dimensions": [
-            2,
-            4,
-            2
-          ]
         }
       ]
     },
@@ -192,7 +204,7 @@
         {
           "name": "Main",
           "dimensions": [
-            8,
+            6,
             12,
             4
           ]
@@ -216,7 +228,7 @@
         {
           "name": "AUX 3",
           "dimensions": [
-            3,
+            1,
             5,
             2
           ]
@@ -251,7 +263,7 @@
       "name": "Constellation Taurus",
       "grids": [
         {
-          "name": "Aft",
+          "name": "Shielded",
           "dimensions": [
             2,
             3,
@@ -272,11 +284,11 @@
       "name": "Retaliator Cargo Module",
       "grids": [
         {
+          "dimensions": [3, 7, 2],
           "name": "Aft",
-          "dimensions": [
-            3,
-            7,
-            2
+          "blocked": [
+            { "position": [2, 0, 0], "dimensions": [1, 1, 2], "supports": false },
+            { "position": [2, 6, 0], "dimensions": [1, 1, 2], "supports": false }
           ]
         },
         {
@@ -305,44 +317,43 @@
     {
       "name": "Caterpillar",
       "grids": [
-        {
+                {
+          "dimensions": [7, 5, 4],
           "name": "1",
-          "dimensions": [
-            4,
-            4,
-            6
+          "blocked": [
+             { "position": [0, 0, 2], "dimensions": [1, 4, 2], "supports": true },
+             { "position": [0, 4, 0], "dimensions": [2, 1, 4], "supports": true }
           ]
         },
         {
+          "dimensions": [7, 5, 4],
           "name": "2",
-          "dimensions": [
-            4,
-            4,
-            6
+          "blocked": [
+             { "position": [0, 0, 2], "dimensions": [1, 4, 2], "supports": true },
+             { "position": [0, 4, 0], "dimensions": [2, 1, 4], "supports": true }
           ]
         },
         {
+          "dimensions": [7, 5, 4],
           "name": "3",
-          "dimensions": [
-            4,
-            4,
-            6
+          "blocked": [
+             { "position": [0, 0, 2], "dimensions": [1, 4, 2], "supports": true },
+             { "position": [0, 4, 0], "dimensions": [2, 1, 4], "supports": true }
           ]
         },
         {
+          "dimensions": [7, 5, 4],
           "name": "4",
-          "dimensions": [
-            4,
-            4,
-            6
+          "blocked": [
+             { "position": [0, 0, 2], "dimensions": [1, 4, 2], "supports": true },
+             { "position": [0, 4, 0], "dimensions": [2, 1, 4], "supports": true }
           ]
         },
         {
-          "name": "5",
-          "dimensions": [
-            6,
-            5,
-            2
+          "dimensions": [5, 6, 3],
+          "name": "Grid 5",
+          "blocked": [
+            { "position": [0, 0, 2], "dimensions": [5, 2, 1], "supports": false }
           ]
         }
       ]
@@ -370,6 +381,14 @@
             5,
             2
           ]
+        },
+        {
+          "name": "Aux",
+          "dimensions": [
+            1,
+            3,
+            2
+          ]
         }
       ]
     },
@@ -393,7 +412,7 @@
           "name": "Main",
           "dimensions": [
             8,
-            6,
+            12,
             2
           ]
         }
@@ -420,43 +439,37 @@
         }
       ]
     },
-    {
-      "name": "Starfarer/Gemini",
-      "grids": [
-        {
-          "name": "Main",
-          "dimensions": [
-            5,
-            7,
-            5
-          ]
-        },
-        {
-          "name": "left",
-          "dimensions": [
-            2,
-            4,
-            5
-          ]
-        },
-        {
-          "name": "right",
-          "dimensions": [
-            2,
-            4,
-            5
-          ]
-        }
-      ]
-    },
+      {
+        "name": "Starfarer/Gemini",
+        "grids": [
+          {
+            "dimensions": [5, 7, 5],
+            "name": "Main"
+          },
+          {
+            "dimensions": [2, 7, 5],
+            "name": "Left",
+            "blocked": [
+              { "position": [0, 5, 2], "dimensions": [2, 2, 3], "supports": false }
+            ]
+          },
+          {
+            "dimensions": [2, 7, 5],
+            "name": "Right",
+            "blocked": [
+              { "position": [0, 5, 2], "dimensions": [2, 2, 3], "supports": false }
+            ]
+          }
+        ]
+      },
     {
       "name": "Constellation Andromeda Phoenix",
       "grids": [
         {
           "name": "Main",
           "dimensions": [
-            4,
-            10,
+            5,
+            8,
             2
           ]
         }
@@ -485,6 +498,22 @@
             9,
             3
           ]
+        },
+        {
+          "name": "Left",
+          "dimensions": [
+            1,
+            2,
+            3
+          ]
+        },
+        {
+          "name": "Right",
+          "dimensions": [
+            1,
+            2,
+            3
+          ]
         }
       ]
     },
@@ -509,7 +538,7 @@
           "dimensions": [
             5,
             6,
-            1
+            3
           ]
         }
       ]
@@ -598,7 +627,7 @@
           "dimensions": [
             2,
             16,
-            1
+            2
           ]
         },
         {
@@ -932,6 +961,157 @@
             12,
             8,
             6
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Ironclad",
+      "grids": [
+        {
+          "name": "1",
+          "dimensions": [
+            6,
+            20,
+            6
+          ]
+        },
+        {
+          "name": "2",
+          "dimensions": [
+            6,
+            20,
+            6
+          ]
+        },
+        {
+          "name": "3",
+          "dimensions": [
+            6,
+            10,
+            6
+          ]
+        },
+        {
+          "name": "4",
+          "dimensions": [
+            6,
+            10,
+            6
+          ]
+        },
+        {
+          "name": "5",
+          "dimensions": [
+            2,
+            2,
+            2
+          ]
+        },
+        {
+          "name": "6",
+          "dimensions": [
+            2,
+            2,
+            2
+          ]
+        },
+        {
+          "name": "7",
+          "dimensions": [
+            2,
+            2,
+            2
+          ]
+        },
+        {
+          "name": "8",
+          "dimensions": [
+            2,
+            2,
+            2
+          ]
+        },
+        {
+          "name": "9",
+          "dimensions": [
+            2,
+            2,
+            2
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Ironclad Assault",
+      "grids": [
+        {
+          "name": "1",
+          "dimensions": [
+            6,
+            20,
+            6
+          ]
+        },
+        {
+          "name": "2",
+          "dimensions": [
+            6,
+            20,
+            6
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Railen",
+      "grids": [
+        {
+          "name": "1",
+          "dimensions": [
+            4,
+            8,
+            4
+          ]
+        },
+        {
+          "name": "2",
+          "dimensions": [
+            4,
+            8,
+            4
+          ]
+        },
+        {
+          "name": "3",
+          "dimensions": [
+            4,
+            8,
+            4
+          ]
+        },
+        {
+          "name": "4",
+          "dimensions": [
+            4,
+            8,
+            4
+          ]
+        },
+        {
+          "name": "5",
+          "dimensions": [
+            2,
+            8,
+            4
+          ]
+        },
+        {
+          "name": "6",
+          "dimensions": [
+            2,
+            8,
+            4
           ]
         }
       ]

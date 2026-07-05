@@ -1,0 +1,148 @@
+{
+  "results": [
+    {
+      "avg_success": 92.2056239035624,
+      "avg_utilization": 63.33333333333333,
+      "category": "large",
+      "grids_count": 2,
+      "ship_name": "C2 Hercules",
+      "total_vol": 696,
+      "label": "Large Ships",
+      "checkpoint": "checkpoints_v6/large_gnn_model (9).pt",
+      "elapsed_seconds": 15.517100095748901
+    },
+    {
+      "avg_success": 92.5673842882319,
+      "avg_utilization": 60.23195876288659,
+      "category": "large",
+      "grids_count": 7,
+      "ship_name": "890 Jump",
+      "total_vol": 388,
+      "label": "Large Ships",
+      "checkpoint": "checkpoints_v6/large_gnn_model (9).pt",
+      "elapsed_seconds": 6.494192600250244
+    },
+    {
+      "avg_success": 99.38977879481313,
+      "avg_utilization": 70.3125,
+      "category": "large",
+      "grids_count": 5,
+      "ship_name": "Caterpillar",
+      "total_vol": 576,
+      "label": "Large Ships",
+      "checkpoint": "checkpoints_v6/large_gnn_model (9).pt",
+      "elapsed_seconds": 11.445200443267822
+    },
+    {
+      "avg_success": 93.38780169044733,
+      "avg_utilization": 64.19540229885058,
+      "category": "large",
+      "grids_count": 2,
+      "ship_name": "M2 Hercules",
+      "total_vol": 522,
+      "label": "Large Ships",
+      "checkpoint": "checkpoints_v6/large_gnn_model (9).pt",
+      "elapsed_seconds": 8.120460748672485
+    },
+    {
+      "avg_success": 98.88308168795974,
+      "avg_utilization": 68.4192439862543,
+      "category": "large",
+      "grids_count": 3,
+      "ship_name": "Starfarer/Gemini",
+      "total_vol": 291,
+      "label": "Large Ships",
+      "checkpoint": "checkpoints_v6/large_gnn_model (9).pt",
+      "elapsed_seconds": 4.921047925949097
+    },
+    {
+      "avg_success": 99.6938775510204,
+      "avg_utilization": 71.0763888888889,
+      "category": "large",
+      "grids_count": 2,
+      "ship_name": "Polaris",
+      "total_vol": 576,
+      "label": "Large Ships",
+      "checkpoint": "checkpoints_v6/large_gnn_model (9).pt",
+      "elapsed_seconds": 8.253618240356445
+    },
+    {
+      "avg_success": 100.0,
+      "avg_utilization": 71.62280701754385,
+      "category": "large",
+      "grids_count": 9,
+      "ship_name": "Carrack",
+      "total_vol": 456,
+      "label": "Large Ships",
+      "checkpoint": "checkpoints_v6/large_gnn_model (9).pt",
+      "elapsed_seconds": 4.990973472595215
+    },
+    {
+      "avg_success": 100.0,
+      "avg_utilization": 71.97916666666666,
+      "category": "large",
+      "grids_count": 2,
+      "ship_name": "Hermes",
+      "total_vol": 288,
+      "label": "Large Ships",
+      "checkpoint": "checkpoints_v6/large_gnn_model (9).pt",
+      "elapsed_seconds": 3.2215006351470947
+    },
+    {
+      "avg_success": 100.0,
+      "avg_utilization": 71.9140625,
+      "category": "large",
+      "grids_count": 8,
+      "ship_name": "Hull-B",
+      "total_vol": 512,
+      "label": "Large Ships",
+      "checkpoint": "checkpoints_v6/large_gnn_model (9).pt",
+      "elapsed_seconds": 7.850971937179565
+    },
+    {
+      "avg_success": 100.0,
+      "avg_utilization": 71.80555555555556,
+      "category": "large",
+      "grids_count": 8,
+      "ship_name": "Hull-c",
+      "total_vol": 4608,
+      "label": "Large Ships",
+      "checkpoint": "checkpoints_v6/large_gnn_model (9).pt",
+      "elapsed_seconds": 28.30197501182556
+    },
+    {
+      "avg_success": 100.0,
+      "avg_utilization": 72.0,
+      "category": "large",
+      "grids_count": 9,
+      "ship_name": "Ironclad",
+      "total_vol": 2200,
+      "label": "Large Ships",
+      "checkpoint": "checkpoints_v6/large_gnn_model (9).pt",
+      "elapsed_seconds": 112.42099738121033
+    },
+    {
+      "avg_success": 95.65422224083419,
+      "avg_utilization": 68.75000000000001,
+      "category": "large",
+      "grids_count": 2,
+      "ship_name": "Ironclad Assault",
+      "total_vol": 1440,
+      "label": "Large Ships",
+      "checkpoint": "checkpoints_v6/large_gnn_model (9).pt",
+      "elapsed_seconds": 40.78603529930115
+    },
+    {
+      "avg_success": 100.0,
+      "avg_utilization": 71.84375,
+      "category": "large",
+      "grids_count": 6,
+      "ship_name": "Railen",
+      "total_vol": 640,
+      "label": "Large Ships",
+      "checkpoint": "checkpoints_v6/large_gnn_model (9).pt",
+      "elapsed_seconds": 14.242265462875366
+    }
+  ],
+  "failures": []
+}

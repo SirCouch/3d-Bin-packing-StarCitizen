@@ -13,11 +13,32 @@ from collections import deque
 from torch_geometric.data import Batch
 from .drl_env import DRLBinPackingEnv
 from .models import ActorGNN, CriticGNN, SharedGNNBackbone
-from scu_manifest_generator import manifest_to_item_list, SCU_DEFINITIONS
+try:
+    from scu_manifest_generator import manifest_to_item_list, SCU_DEFINITIONS
+except ModuleNotFoundError:
+    from src.scu_manifest_generator import manifest_to_item_list, SCU_DEFINITIONS
 
 STOP_FILE = "STOP_TRAINING"
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+
+def compute_ship_sampling_weights(possible_ships, ship_success_history=None):
+    """Return the V4-style per-ship performance sampling weights."""
+    weights = []
+    for idx in range(len(possible_ships)):
+        if ship_success_history is None:
+            weights.append(1.0)
+            continue
+
+        history = ship_success_history[idx]
+        if len(history) < 3:
+            weights.append(1.0)
+        else:
+            avg_sr = np.mean(list(history))
+            # Soft weighting: weak ships are more likely, but not dominant.
+            weights.append(max(1.0 - 0.5 * avg_sr, 0.3))
+    return weights
 
 
 def load_ships_from_json(path='ships_cargo_grids.json'):
@@ -25,7 +46,15 @@ def load_ships_from_json(path='ships_cargo_grids.json'):
     try:
         with open(path, 'r') as f:
             data = json.load(f)
-            return [[(tuple(g['dimensions']), g['name']) for g in ship['grids']] for ship in data['ships']]
+            ships = []
+            for ship in data['ships']:
+                grids = []
+                for g in ship['grids']:
+                    dims = tuple(g['dimensions'])
+                    blocked = g.get('blocked', [])
+                    grids.append([dims, g['name'], blocked] if blocked else [dims, g['name']])
+                ships.append(grids)
+            return ships
     except Exception as e:
         print(f"Failed to load ships from {path}: {e}")
         return [[((10, 10, 10), "Main")]]
@@ -213,17 +242,9 @@ def train_agent(num_episodes=1000, gamma=0.95, gae_lambda=0.95,
                                    'critic_losses': critic_losses}
 
     for episode in range(start_episode, num_episodes):
-        # #7: Performance-weighted ship sampling — train more on ships we're bad at
+        # #7: Performance-weighted ship sampling — train more on ships we're bad at.
         if possible_ships:
-            ship_weights = []
-            for i in range(len(possible_ships)):
-                history = ship_success_history[i]
-                if len(history) < 3:
-                    ship_weights.append(1.0)  # unexplored ships get base weight
-                else:
-                    avg_sr = np.mean(list(history))
-                    # Soft weighting: weak ships ~2x more likely, not 10x
-                    ship_weights.append(max(1.0 - 0.5 * avg_sr, 0.3))
+            ship_weights = compute_ship_sampling_weights(possible_ships, ship_success_history)
             ship_idx = random.choices(range(len(possible_ships)), weights=ship_weights, k=1)[0]
             selected_ship = possible_ships[ship_idx]
             env = DRLBinPackingEnv(grids_list=selected_ship)
@@ -515,8 +536,11 @@ def evaluate_agent(env, actor, num_episodes=10, visualize=False):
             for episode in range(num_episodes):
                 state = env.reset(difficulty="hard")  # Evaluate on hard difficulty
                 episode_reward = 0
-                total_item_volume = 0
-                container_volume = sum(torch.prod(g['dims']).item() for g in env.grids)
+                container_volume = getattr(
+                    env,
+                    "total_ship_volume",
+                    sum(torch.prod(g['dims']).item() for g in env.grids),
+                )
 
                 # Episode loop
                 while True:
@@ -526,7 +550,7 @@ def evaluate_agent(env, actor, num_episodes=10, visualize=False):
                     # Check if there are any feasible actions
                     if not feasibility_mask.any():
                         # No feasible placements, move to next item
-                        _, reward, done, _ = env.step(0)  # Dummy action
+                        state, reward, done, _ = env.step(0)  # Dummy action
                         episode_reward += reward
 
                         if done:
@@ -545,12 +569,6 @@ def evaluate_agent(env, actor, num_episodes=10, visualize=False):
                     next_state, reward, done, _ = env.step(action.item())
                     episode_reward += reward
 
-                    # If successful placement, add volume
-                    if env.successful_placements > 0 and env.current_item_idx > 0:
-                        prev_item = env.cargo_manifest[env.current_item_idx - 1]
-                        w, l, h, _, _ = prev_item
-                        total_item_volume += w * l * h
-
                     # Update state
                     state = next_state
 
@@ -560,7 +578,13 @@ def evaluate_agent(env, actor, num_episodes=10, visualize=False):
 
                 # Calculate metrics
                 success_rate = env.successful_placements / env.total_items if env.total_items > 0 else 0
-                volume_utilization = total_item_volume / container_volume
+                total_item_volume = sum(
+                    p['box'].volume for p in env.placed_items
+                    if not p.get('is_blocker')
+                )
+                volume_utilization = (
+                    total_item_volume / container_volume if container_volume > 0 else 0.0
+                )
 
                 episode_rewards.append(episode_reward)
                 success_rates.append(success_rate)
@@ -627,6 +651,8 @@ def visualize_packing(env):
 
         # Plot placed items
         for i, placed in enumerate(env.placed_items):
+            if placed.get('is_blocker'):
+                continue
             box = placed['box']
             priority = placed['priority']
 
@@ -692,12 +718,14 @@ def visualize_packing(env):
 
         # Add volume utilization information
         total_volume = 0
-        container_volume = float(sum(torch.prod(g['dims']).item() for g in env.grids))
+        container_volume = float(env.total_ship_volume)
         for placed in env.placed_items:
+            if placed.get('is_blocker'):
+                continue
             box = placed['box']
             total_volume += float(box.volume)
 
-        utilization = total_volume / container_volume * 100
+        utilization = total_volume / container_volume * 100 if container_volume > 0 else 0.0
         plt.figtext(0.02, 0.02, f"Volume Utilization: {utilization:.1f}%", fontsize=10)
         plt.figtext(0.02, 0.05, f"Success Rate: {env.successful_placements}/{env.total_items}", fontsize=10)
 
@@ -855,7 +883,8 @@ def pack_single_manifest(actor, grids_list, manifest, device=None, diagnose=Fals
 
     # Prepare results
     placements = []
-    for i, placed in enumerate(env.placed_items):
+    real_placements = [p for p in env.placed_items if not p.get('is_blocker')]
+    for i, placed in enumerate(real_placements):
         box = placed['box']
 
         # Find which SCU type this corresponds to (compare sorted dims since rotation changes order)
@@ -880,9 +909,9 @@ def pack_single_manifest(actor, grids_list, manifest, device=None, diagnose=Fals
 
     # Calculate metrics
     success_rate = env.successful_placements / env.total_items if env.total_items > 0 else 0
-    total_volume = sum(p['box'].volume for p in env.placed_items)
-    container_volume = sum(torch.prod(g['dims']).item() for g in env.grids)
-    utilization = total_volume / container_volume
+    total_volume = sum(p['box'].volume for p in real_placements)
+    container_volume = env.total_ship_volume
+    utilization = total_volume / container_volume if container_volume > 0 else 0.0
 
     # Identify unplaced items: the ACTUAL skipped indices, plus any manifest tail
     # the loop never reached (shouldn't normally happen, but guard against it).

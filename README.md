@@ -10,6 +10,7 @@ This project solves 3D bin-packing within Star Citizen's Standard Cargo Unit (SC
 - **Heavy-Stacking Physics** — heavier boxes cannot rest on lighter ones
 - **Priority Accessibility** — higher-priority cargo is placed closer to the front for unloading
 - **Physical Fit Validation** — manifests only contain containers that geometrically fit the ship's grids
+- **Irregular Cargo Grids** - blocker cuboids carve unusable hull/void space out of bounding-box grids
 
 ## Architecture
 
@@ -20,8 +21,8 @@ Three size-specialized models, each with a shared Actor-Critic GNN backbone:
 | Model | Ships | Episodes | Hidden Dim |
 |-------|-------|----------|-----------|
 | Small | ≤64 SCU | 500 | 128 |
-| Medium | 65–256 SCU | 2,000 | 128 |
-| Large | >256 SCU | 3,000 | 256 |
+| Medium | 65–256 SCU | 3,000 | 128 |
+| Large | >256 SCU | 2,500 | 256 |
 
 `EnsembleRouter` (`src/ensemble_inference.py`) selects the appropriate model based on total ship volume.
 
@@ -46,14 +47,18 @@ Three size-specialized models, each with a shared Actor-Critic GNN backbone:
 | `box3d.py` | 3D geometry primitive — overlap, containment, fit checks (GPU tensors) |
 | `utils.py` | `train_agent()`, `pack_single_manifest()`, `load_trained_model()`, GAE/batching utilities |
 
-### Performance (very-hard difficulty, 28 ships)
+### Latest Evaluation (V6, hard difficulty, 43 ships)
 
-| Category | Avg Success Rate | Avg Volume Utilization |
-|----------|-----------------|----------------------|
-| Small (12 ships) | 94% | 70% |
-| Medium (12 ships) | 78% | 55% |
-| Large (4 ships) | 72% | 51% |
-| **Global** | **84%** | **61%** |
+Full report: `ensemble_evaluation_v6.md`
+
+| Category | Ships | Avg Success Rate | Avg Volume Utilization |
+|----------|------:|-----------------:|-----------------------:|
+| Small | 13 | 99.03% | 68.31% |
+| Medium | 17 | 91.53% | 63.04% |
+| Large | 13 | 97.83% | 69.04% |
+| **Global** | **43** | **95.70%** | **66.45%** |
+
+V6 restores the V4-style long-lane training curriculum while retaining blocker-based irregular grid support. Key long-lane results: Ironclad 100.0%, Ironclad Assault 95.7%, Polaris 99.7%.
 
 ## Getting Started
 
@@ -105,7 +110,7 @@ curl -X POST http://localhost:8000/optimize \
 
 ### Ship Data
 
-`ships_cargo_grids.json` contains 28 Star Citizen ships with their cargo grid dimensions, from the Avenger Titan (8 SCU) to the C2 Hercules (696 SCU).
+`ships_cargo_grids.json` contains 43 Star Citizen ships with cargo grid dimensions and optional `blocked` cuboids for irregular grids, from the Avenger Titan (8 SCU) to the Hull-c (4,608 usable SCU).
 
 ## Contributing
 
