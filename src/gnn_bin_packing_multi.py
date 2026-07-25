@@ -2,7 +2,6 @@
 Legacy entry point — all logic now lives in packing_core/.
 This file re-exports the public API for backwards compatibility.
 """
-import json
 import torch
 from packing_core.models import ActorGNN, CriticGNN
 from packing_core.drl_env import DRLBinPackingEnv

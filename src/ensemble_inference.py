@@ -1,54 +1,80 @@
-import os
+from pathlib import Path
+
 import torch
-import numpy as np
+
 from packing_core.utils import load_trained_model, pack_single_manifest
 from scu_manifest_generator import get_total_usable_volume
 
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _resolve_checkpoint(path):
+    path = Path(path)
+    if path.is_absolute():
+        return path
+    if path.exists():
+        return path.resolve()
+    return REPO_ROOT / path
+
+
 class EnsembleRouter:
-    def __init__(self, small_ckpt="small_gnn_model.pt", medium_ckpt="medium_gnn_model.pt", large_ckpt="large_gnn_model.pt"):
+    def __init__(
+        self,
+        small_ckpt="small_gnn_model.pt",
+        medium_ckpt="medium_gnn_model.pt",
+        large_ckpt="large_gnn_model.pt",
+    ):
         print("Initializing Specialized Ensemble Router...")
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        
-        # Determine path relative to root
-        base_path = "." if os.path.exists(small_ckpt) else ".."
-            
-        small_path = os.path.join(base_path, small_ckpt)
-        medium_path = os.path.join(base_path, medium_ckpt)
-        large_path = os.path.join(base_path, large_ckpt)
+
+        small_path = _resolve_checkpoint(small_ckpt)
+        medium_path = _resolve_checkpoint(medium_ckpt)
+        large_path = _resolve_checkpoint(large_ckpt)
 
         # Load models
         try:
             print(f"Loading Small Model from {small_path}...")
-            self.actor_small, _ = load_trained_model(checkpoint_path=small_path, device=self.device)
+            self.actor_small, _ = load_trained_model(
+                checkpoint_path=small_path,
+                device=self.device,
+            )
             print("Small Model Online.")
-        except Exception as e:
-            print(f"Warning: Small Model offline: {e}")
+        except Exception as exc:
+            print(f"Warning: Small Model offline: {exc}")
             self.actor_small = None
 
         try:
             print(f"Loading Medium Model from {medium_path}...")
-            self.actor_medium, _ = load_trained_model(checkpoint_path=medium_path, device=self.device)
+            self.actor_medium, _ = load_trained_model(
+                checkpoint_path=medium_path,
+                device=self.device,
+            )
             print("Medium Model Online.")
-        except Exception as e:
-            print(f"Warning: Medium Model offline: {e}")
+        except Exception as exc:
+            print(f"Warning: Medium Model offline: {exc}")
             self.actor_medium = None
 
         try:
             print(f"Loading Large Model from {large_path}...")
-            self.actor_large, _ = load_trained_model(checkpoint_path=large_path, device=self.device)
+            self.actor_large, _ = load_trained_model(
+                checkpoint_path=large_path,
+                device=self.device,
+            )
             print("Large Model Online.")
-        except Exception as e:
-            print(f"Warning: Large Model offline: {e}")
+        except Exception as exc:
+            print(f"Warning: Large Model offline: {exc}")
             self.actor_large = None
 
     def route_manifest(self, ship_grids, manifest, diagnose=False):
-        """
-        Calculates the total volume of the ship and routes the payload to the specialized model.
-        """
+        """Route a manifest to the specialist for the ship's usable volume."""
         # Calculate total SCU volume across all grids
         total_vol = get_total_usable_volume(ship_grids)
 
-        print(f"Incoming Ship Volume: {total_vol} SCU. Routing to specialized model...")
+        print(
+            f"Incoming Ship Volume: {total_vol} SCU. "
+            "Routing to specialized model..."
+        )
 
         # Select model based on breakpoints
         if total_vol <= 64 and self.actor_small is not None:
@@ -62,11 +88,20 @@ class EnsembleRouter:
             selected_actor = self.actor_large
         else:
             # Fallback
-            print("WARNING: Falling back to first available model due to offline specialized models.")
+            print(
+                "WARNING: Falling back to the first available model because "
+                "the expected specialist is offline."
+            )
             selected_actor = self.actor_large or self.actor_medium or self.actor_small
 
         if selected_actor is None:
             raise ValueError("All specialized models are offline. Cannot route request.")
 
         # Run inference using the selected specialist
-        return pack_single_manifest(selected_actor, ship_grids, manifest, device=self.device, diagnose=diagnose)
+        return pack_single_manifest(
+            selected_actor,
+            ship_grids,
+            manifest,
+            device=self.device,
+            diagnose=diagnose,
+        )

@@ -2,35 +2,44 @@
 __pycache__/
 *.py[cod]
 *.egg-info/
-dist/
+.pytest_cache/
 build/
+dist/
 
-# Model checkpoints (large binary files)
+# Model checkpoints and local training controls
 *.pt
+STOP_TRAINING
 
-# Training logs and outputs
-*.txt
+# Generated reports, logs, and visualizations
 *.log
 *.png
+*.txt
+artifacts/
+evaluation/results/latest.json
+
+# Legacy evaluation filenames (the canonical report is EVALUATION.md)
+ensemble_evaluation_*.md
+ensemble_evaluation_*_results.json
+eval_comparison.*
 evaluation_report.md
 evaluation_results.txt
 
-# IDE
+# Editors
 .idea/
 .vscode/
 *.iml
 
-# Claude Code
+# Local agent and integration configuration
 .claude/
 CLAUDE.md
 .mcp.json
 
-# Reference books and task tracking
+# Research notes, historical source, and local task artifacts
+archive/
 context/
 tasks/
 
-# Legacy/scratch files
-archive/
+# Legacy and scratch files
 extract_utils.py
 fix_utils.py
 modularize.py
@@ -38,8 +47,7 @@ cargo_grids.json
 ships.json
 workflow-orchestration.md
 
-# Local-only — not part of the SirCouch/3d-Bin-packing-StarCitizen repo
+# Local-only application assets
 src/desktop_app.py
 frontend/
 tools/sc_bundle.js
-STOP_TRAINING
