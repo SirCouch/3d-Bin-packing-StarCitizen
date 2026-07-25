@@ -10,6 +10,7 @@ import matplotlib
 matplotlib.use('Agg')  # non-interactive backend — plt.show() becomes a no-op
 import matplotlib.pyplot as plt
 from collections import deque
+from pathlib import Path
 from torch_geometric.data import Batch
 from .drl_env import DRLBinPackingEnv
 from .models import ActorGNN, CriticGNN, SharedGNNBackbone
@@ -18,9 +19,17 @@ try:
 except ModuleNotFoundError:
     from src.scu_manifest_generator import manifest_to_item_list, SCU_DEFINITIONS
 
-STOP_FILE = "STOP_TRAINING"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+ARTIFACTS_DIR = REPO_ROOT / "artifacts"
+FIGURES_DIR = ARTIFACTS_DIR / "figures"
+STOP_FILE = REPO_ROOT / "STOP_TRAINING"
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+
+def _artifact_path(filename):
+    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+    return FIGURES_DIR / filename
 
 
 def compute_ship_sampling_weights(possible_ships, ship_success_history=None):
@@ -41,10 +50,11 @@ def compute_ship_sampling_weights(possible_ships, ship_success_history=None):
     return weights
 
 
-def load_ships_from_json(path='ships_cargo_grids.json'):
+def load_ships_from_json(path=None):
     """Load ship configurations from JSON for training."""
+    path = Path(path) if path is not None else REPO_ROOT / 'ships_cargo_grids.json'
     try:
-        with open(path, 'r') as f:
+        with open(path, 'r', encoding='utf-8') as f:
             data = json.load(f)
             ships = []
             for ship in data['ships']:
@@ -513,7 +523,7 @@ def plot_training_curves(rewards, actor_losses, critic_losses):
             plt.ylabel('Loss')
 
             plt.tight_layout()
-            plt.savefig('enhanced_gnn_training_curves.png')
+            plt.savefig(_artifact_path('enhanced_gnn_training_curves.png'))
             plt.close('all')
 
 def evaluate_agent(env, actor, num_episodes=10, visualize=False):
@@ -730,7 +740,7 @@ def visualize_packing(env):
         plt.figtext(0.02, 0.05, f"Success Rate: {env.successful_placements}/{env.total_items}", fontsize=10)
 
         plt.tight_layout()
-        plt.savefig('enhanced_3d_packing_visualization.png')
+        plt.savefig(_artifact_path('enhanced_3d_packing_visualization.png'))
         plt.close('all')
 
     except ImportError as e:
